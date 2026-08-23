@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+env/
+.eggs/
+
+# Flet / PyInstaller
+*.spec
+storage/
+
+# The app's own workspace, if anyone points it at the repo
+projects/
+settings.json
+studio.log
+keys.fallback
+browser-profile/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Secrets - never commit these
+.env
+*.p8
+*service-account*.json
+client_secret*.json

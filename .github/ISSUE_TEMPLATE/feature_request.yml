@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest an asset type, integration or improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to ship
+      description: Describe the product you are trying to get published, not the feature.
+    validations: {required: true}
+  - type: textarea
+    id: manual
+    attributes:
+      label: What do you do by hand today
+    validations: {required: true}
+  - type: input
+    id: platform
+    attributes:
+      label: Does the platform have a public API
+      placeholder: Link to its docs if you know

@@ -1,0 +1,15 @@
+# Core application
+flet==0.28.3
+httpx>=0.27
+keyring>=25.0
+Pillow>=10.3
+reportlab>=4.1
+markdown>=3.6
+PyJWT[crypto]>=2.8
+
+# Optional. Each unlocks one feature; the app runs without them and says which
+# are missing in Settings > Publishing.
+edge-tts>=6.1          # free voiceovers for video, audiobooks and podcasts
+playwright>=1.44       # assisted KDP publishing
+pypdf>=4.2             # single-page PDF export for printable packs
+pdf2image>=1.17        # real page previews in printable listing images (needs poppler)

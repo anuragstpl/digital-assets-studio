@@ -1,0 +1,41 @@
+name: Bug report
+description: Something does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please run `python doctor.py` first — it catches most setup problems and
+        tells you the fix.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations: {required: true}
+  - type: dropdown
+    id: pipeline
+    attributes:
+      label: Which asset type
+      options: [Book, Printables, Audiobook, YouTube, Podcast, Course, Mobile app,
+                Settings / setup, Something else]
+    validations: {required: true}
+  - type: input
+    id: step
+    attributes:
+      label: Which step
+      placeholder: e.g. "Upload to YouTube"
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `python doctor.py`
+      render: text
+    validations: {required: true}
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant lines from studio.log
+      description: |
+        In the workspace folder shown by doctor.py. Please remove any API keys
+        before pasting.
+      render: text

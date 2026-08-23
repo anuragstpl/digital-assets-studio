@@ -1,0 +1,110 @@
+name: release
+
+# Tag a version and GitHub builds the installers:
+#     git tag v0.5.0 && git push origin v0.5.0
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build the app
+        run: pyinstaller packaging/das.spec --noconfirm
+
+      - name: Verify the build
+        run: dist\DigitalAssetsStudio\DigitalAssetsStudio.exe --selftest
+
+      - name: Read the version
+        id: version
+        shell: bash
+        run: echo "v=$(python -c 'from digital_assets_studio.config import APP_VERSION; print(APP_VERSION)')" >> $GITHUB_OUTPUT
+
+      - name: Build the installer
+        run: |
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.version.outputs.v }}" packaging\installer.iss
+
+      - name: Also publish a portable zip
+        shell: bash
+        run: |
+          cd dist && 7z a "DigitalAssetsStudio-${{ steps.version.outputs.v }}-windows-portable.zip" DigitalAssetsStudio/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/*-windows-setup.exe
+            dist/*-windows-portable.zip
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        # arm64 for Apple silicon, x86_64 for Intel Macs
+        include:
+          - runner: macos-14
+            arch: arm64
+          - runner: macos-13
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+
+      - name: Build the app and DMG
+        run: bash packaging/build_macos.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: dist/*.dmg
+
+  publish:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {path: artifacts}
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            **Windows** — download `…-windows-setup.exe` and run it. Windows
+            SmartScreen will warn that the publisher is unknown, because the build
+            is not code-signed: click **More info → Run anyway**. Prefer no
+            installer? Take the portable zip instead.
+
+            **macOS** — download the `.dmg` for your chip (`arm64` for Apple
+            silicon, `x86_64` for Intel) and drag the app to Applications. The
+            build is ad-hoc signed but not notarised, so the first launch needs
+            **right-click → Open → Open**. After that it opens normally.
+
+            **From source** — `pip install -r requirements.txt && python run.py`
+
+            ### Optional extras
+
+            Video and audio steps need ffmpeg:
+            `winget install Gyan.FFmpeg` or `brew install ffmpeg`.
+            Free voiceovers need `pip install edge-tts`.

@@ -1,0 +1,12 @@
+The bundled fonts are used under the SIL Open Font License, Version 1.1.
+
+  Poppins  — Copyright (c) 2020 The Poppins Project Authors
+             https://github.com/itfoundry/Poppins
+  Lora     — Copyright (c) 2011 The Lora Project Authors
+             https://github.com/cyrealtype/Lora-Cyrillic
+
+Full licence text: https://openfontlicense.org
+
+These fonts may be used, studied, modified and redistributed freely, including
+in the books, covers and videos this application produces. They may not be sold
+by themselves.
