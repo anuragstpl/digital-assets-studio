@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Please open a [private security advisory](https://github.com/aidiginext/digital-assets-studio/security/advisories/new)
+Please open a [private security advisory](https://github.com/anuragstpl/digital-assets-studio/security/advisories/new)
 rather than a public issue. You should get a first response within a week.
 
 ## How this app handles your secrets

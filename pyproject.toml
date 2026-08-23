@@ -43,9 +43,9 @@ printables = ["pypdf>=4.2", "pdf2image>=1.17"]
 all = ["edge-tts>=6.1", "playwright>=1.44", "pypdf>=4.2", "pdf2image>=1.17"]
 
 [project.urls]
-Homepage = "https://github.com/aidiginext/digital-assets-studio"
-Issues = "https://github.com/aidiginext/digital-assets-studio/issues"
-Changelog = "https://github.com/aidiginext/digital-assets-studio/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/anuragstpl/digital-assets-studio"
+Issues = "https://github.com/anuragstpl/digital-assets-studio/issues"
+Changelog = "https://github.com/anuragstpl/digital-assets-studio/blob/main/CHANGELOG.md"
 
 [project.scripts]
 digital-assets-studio = "digital_assets_studio.app:run"

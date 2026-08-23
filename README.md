@@ -10,8 +10,8 @@ Take a digital product from idea to published — books, printables, audiobooks,
 YouTube videos, podcasts, courses and mobile apps — automating every step the
 platform allows, and stopping only where a person is genuinely required.
 
-[![tests](https://github.com/aidiginext/digital-assets-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/aidiginext/digital-assets-studio/actions/workflows/ci.yml)
-[![release](https://img.shields.io/github/v/release/aidiginext/digital-assets-studio?sort=semver)](https://github.com/aidiginext/digital-assets-studio/releases/latest)
+[![tests](https://github.com/anuragstpl/digital-assets-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/anuragstpl/digital-assets-studio/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/anuragstpl/digital-assets-studio?sort=semver)](https://github.com/anuragstpl/digital-assets-studio/releases/latest)
 [![licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.10--3.12-blue)](https://www.python.org/)
 
@@ -22,7 +22,7 @@ platform allows, and stopping only where a person is genuinely required.
 ## Install
 
 **Windows** — download the installer from
-[Releases](https://github.com/aidiginext/digital-assets-studio/releases/latest) and run it.
+[Releases](https://github.com/anuragstpl/digital-assets-studio/releases/latest) and run it.
 SmartScreen will say the publisher is unknown, because the build is not
 code-signed: **More info → Run anyway**. A portable zip is there too if you would
 rather not install anything.
@@ -34,7 +34,7 @@ notarised, so the first launch needs **right-click → Open → Open**.
 **From source** — any platform, Python 3.10–3.12:
 
 ```bash
-git clone https://github.com/aidiginext/digital-assets-studio.git
+git clone https://github.com/anuragstpl/digital-assets-studio.git
 cd digital-assets-studio
 python -m pip install -r requirements.txt
 python run.py

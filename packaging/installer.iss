@@ -6,7 +6,7 @@
 
 #define AppName "Digital Assets Studio"
 #define AppPublisher "AIpath"
-#define AppURL "https://github.com/aidiginext/digital-assets-studio"
+#define AppURL "https://github.com/anuragstpl/digital-assets-studio"
 #define AppExeName "DigitalAssetsStudio.exe"
 
 [Setup]

@@ -57,9 +57,10 @@ jobs:
       matrix:
         # arm64 for Apple silicon, x86_64 for Intel Macs
         include:
-          - runner: macos-14
+          - runner: macos-15
             arch: arm64
-          - runner: macos-13
+          # macos-13 was retired on 4 December 2025; macos-15-intel replaced it
+          - runner: macos-15-intel
             arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
@@ -78,10 +79,17 @@ jobs:
   publish:
     needs: [windows, macos]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    # `always()` so a failure on one platform still ships the others, rather than
+    # leaving the release page empty because a single runner image went away
+    if: always() && startsWith(github.ref, 'refs/tags/') && contains(needs.*.result, 'success')
     steps:
       - uses: actions/download-artifact@v4
-        with: {path: artifacts}
+        with:
+          path: artifacts
+          merge-multiple: false
+
+      - name: What was built
+        run: find artifacts -type f | sort
 
       - name: Publish the release
         uses: softprops/action-gh-release@v2

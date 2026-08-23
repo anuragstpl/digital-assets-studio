@@ -7,7 +7,7 @@ honest about what it cannot do?
 ## Getting set up
 
 ```bash
-git clone https://github.com/aidiginext/digital-assets-studio.git
+git clone https://github.com/anuragstpl/digital-assets-studio.git
 cd digital-assets-studio
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate

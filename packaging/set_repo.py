@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Point the repo at your own GitHub account.
 
-If you forked this, or your username is not `aidiginext`, run:
+If you forked this, or your username is not `anuragstpl`, run:
 
     python packaging/set_repo.py your-username [repo-name]
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-OLD_OWNER, OLD_REPO = "aidiginext", "digital-assets-studio"
+OLD_OWNER, OLD_REPO = "anuragstpl", "digital-assets-studio"
 FILES = ["README.md", "CONTRIBUTING.md", "SECURITY.md", "pyproject.toml",
          "packaging/installer.iss", ".github/workflows/release.yml"]
 
