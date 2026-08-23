@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ...config import (ASSETS_DIR, ROLE_MARKETING, ROLE_METADATA, ROLE_PLANNING, ROLE_RESEARCH,
+from ...config import (ASSETS_DIR, ROLE_IMAGE_PROMPT, ROLE_MARKETING, ROLE_METADATA,
+                       ROLE_PLANNING, ROLE_RESEARCH,
                        ROLE_SCRIPT)
 from ...core.jobs import JobContext
 from ...core.llm import router
@@ -51,7 +52,7 @@ Return JSON:
 """
     data = router.text_json(ROLE_PLANNING, prompt, VOICE_NOTE, max_tokens=3000)
     p.write_text("drafts/positioning.json", json.dumps(data, indent=2))
-    md = [f"# Positioning", "", f"**Promise** — {data.get('promise','')}", "",
+    md = ["# Positioning", "", f"**Promise** — {data.get('promise','')}", "",
           f"**The unit** — {data.get('unit','')}", "",
           f"**Tagline** — {data.get('tagline','')}", "",
           f"**Differentiator** — {data.get('differentiator','')}", "",

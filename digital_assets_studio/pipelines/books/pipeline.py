@@ -66,7 +66,7 @@ def _step_market(p: Project, ctx: JobContext) -> StepResult:
     md = [f"# Market check — {m.get('demand_verdict','?').upper()}", "", m.get("reasoning", ""), "",
           "## What the incumbents already do", "", m.get("competition", ""), "",
           "## The gap", "", m.get("gap") or "_No clear gap found. That is a reason to change the angle._", "",
-          f"## Price band", "", m.get("price_band", ""), "",
+          "## Price band", "", m.get("price_band", ""), "",
           "## Alternative titles", ""] + [f"- {t}" for t in m.get("title_alternates", [])]
     md += ["", "## Search phrases buyers actually type", ""] + [f"- {k}" for k in m.get("keywords_seed", [])]
     md += ["", "## Warnings", ""] + [f"- {w}" for w in m.get("warnings", [])]
@@ -426,7 +426,7 @@ def _step_pack(p: Project, ctx: JobContext) -> StepResult:
         "generated": datetime.now().isoformat(timespec="seconds"),
         "ai_assisted": True,
     }
-    out = build_pack(p.dir, p.build / "store_pack.zip", files, manifest)
+    build_pack(p.dir, p.build / "store_pack.zip", files, manifest)
     included = sum(1 for f in files if f.exists())
     return StepResult(f"store_pack.zip built with {included} files", ["build/store_pack.zip"])
 

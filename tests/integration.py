@@ -273,7 +273,7 @@ def test_play_guards_and_errors():
         api.json_route("POST", rf"/androidpublisher/v3/applications/{pkg}/edits", {"id": "E2"})
         api.json_route("DELETE", rf"/androidpublisher/v3/applications/{pkg}/edits/E2", {})
         try:
-            with play.Edit(pkg) as e:
+            with play.Edit(pkg):
                 raise RuntimeError("something went wrong mid-edit")
         except RuntimeError:
             pass
@@ -587,7 +587,7 @@ def test_youtube_publish_step():
     from digital_assets_studio.pipelines.youtube import pipeline as ytp
 
     with MockAPI() as api:
-        yt = _youtube_api(api)
+        _youtube_api(api)
         api.json_route("GET", "/youtube/v3/channels", CHANNEL)
         api.json_route("POST", "/upload/youtube/v3/videos",
                        lambda req, m: (_ for _ in ()).throw(AssertionError("should be resumable")))
@@ -647,7 +647,7 @@ def test_play_publish_step():
     from digital_assets_studio.pipelines import get as get_pipeline
 
     with MockAPI() as api:
-        play = _play(api)
+        _play(api)
         pkg = "com.test.app"
         api.json_route("POST", rf"/androidpublisher/v3/applications/{pkg}/edits", {"id": "E9"})
         api.json_route("PUT", rf"/androidpublisher/v3/applications/{pkg}/edits/E9/listings/en-US", {})
@@ -718,7 +718,7 @@ def test_podcast_produce_and_feed():
     assert proj.exists("build/ep001.mp3"), "no episode audio produced"
     assert "RMS" in produced.message, produced.message
 
-    feed = pipe.execute(pl, proj, pl.step("feed"), JobContext("t", "t"))
+    pipe.execute(pl, proj, pl.step("feed"), JobContext("t", "t"))
     xml = proj.read_text("build/feed.xml")
     doc = minidom.parseString(xml)
     item = doc.getElementsByTagName("item")[0]
@@ -764,7 +764,7 @@ def test_course_video_step():
     from digital_assets_studio.core.jobs import JobContext
     from digital_assets_studio.pipelines import get as get_pipeline
 
-    tts = _fake_tts()
+    _fake_tts()
     proj = _project("course", {
         "subject": "s", "student": "st", "outcome": "o", "length": "Short (under 1 hour)",
         "price": "$49-99", "theme": "Light"}, "Course publish")
@@ -808,7 +808,7 @@ def test_appstore_push_step():
     from digital_assets_studio.pipelines import get as get_pipeline
 
     with MockAPI() as api:
-        appstore = _appstore(api)
+        _appstore(api)
         api.json_route("GET", r"/v1/apps", {"data": [
             {"id": "APP7", "attributes": {"name": "T", "bundleId": "com.test.app", "sku": "S"}}]})
         api.json_route("GET", r"/v1/apps/APP7/appStoreVersions", {"data": []})
@@ -846,7 +846,7 @@ def test_youtube_short_cut_step():
     from digital_assets_studio.pipelines import get as get_pipeline
 
     with MockAPI() as api:
-        yt = _youtube_api(api)
+        _youtube_api(api)
 
         @api.route("POST", r"/upload/youtube/v3/videos")
         def start(req, m):
@@ -903,6 +903,30 @@ def _youtube_project_for_render(engine: str, name: str):
     return proj
 
 
+def test_stock_terms_step_actually_runs():
+    """The step that broke. It had no test that executed it, so a missing import
+    sat there until a user pressed the button."""
+    from digital_assets_studio.core import pipeline as pipe
+    from digital_assets_studio.core.jobs import JobContext
+    from digital_assets_studio.core.llm import router
+    from digital_assets_studio.pipelines import get as get_pipeline
+
+    real = router.text_json
+    router.text_json = lambda role, user, system="", **kw: {
+        "terms": [["market stall", "shopfront"], ["hands typing", "laptop desk"]]}
+    try:
+        proj = _youtube_project_for_render("Stock footage (Pexels / Pixabay)", "Stock terms")
+        pl = get_pipeline("youtube")
+        pipe.mark_manual_done(proj, pl.step("script"))
+        result = pipe.execute(pl, proj, pl.step("stock_terms"), JobContext("t", "t"))
+        saved = json.loads(proj.read_text("drafts/episodes/ep-r.stock_terms.json"))
+        assert saved["all"] == ["market stall", "shopfront", "hands typing", "laptop desk"], saved
+        assert len(saved["per_scene"]) == 2
+        assert "4 search terms" in result.message, result.message
+    finally:
+        router.text_json = real
+
+
 def test_render_with_stock_engine():
     """The stock engine end to end: search terms, downloaded clips, real ffmpeg."""
     from digital_assets_studio.core import pipeline as pipe
@@ -912,7 +936,7 @@ def test_render_with_stock_engine():
 
     tts = _fake_tts()
     with MockAPI() as api:
-        sv = _stock(api)
+        _stock(api)
         import subprocess
         clip = Path(WORK) / "stockclip.mp4"
         subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i",
@@ -1033,6 +1057,7 @@ if __name__ == "__main__":
     check("pipeline: podcast audio and RSS feed", test_podcast_produce_and_feed)
     check("pipeline: audiobook mastering and M4B", test_audiobook_master_and_package)
     check("pipeline: course lesson video", test_course_video_step)
+    check("pipeline: stock search terms step", test_stock_terms_step_actually_runs)
     check("pipeline: stock-footage render end to end", test_render_with_stock_engine)
     check("pipeline: MoneyPrinterTurbo render", test_render_with_moneyprinterturbo)
     check("pipeline: appstore metadata push", test_appstore_push_step)

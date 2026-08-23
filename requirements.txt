@@ -7,6 +7,9 @@ reportlab>=4.1
 markdown>=3.6
 PyJWT[crypto]>=2.8
 
+# Development only
+pyflakes>=3.2          # tests/lint.py
+
 # Optional. Each unlocks one feature; the app runs without them and says which
 # are missing in Settings > Publishing.
 edge-tts>=6.1          # free voiceovers for video, audiobooks and podcasts

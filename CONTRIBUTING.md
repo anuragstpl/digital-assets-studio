@@ -22,11 +22,19 @@ API and the UI does not run on it.
 ## Running the tests
 
 ```bash
+python tests/lint.py          # undefined names and dead code, across every file
 python tests/smoke.py         # every screen, every pipeline, offline with a stub model
 python tests/integration.py   # every publishing connector against mock API servers
 ```
 
-Neither needs credentials or network access. Both must pass before a pull request.
+None of them needs credentials or network access. All three must pass before a
+pull request. `tests/lint.py` needs `pip install pyflakes`; it skips with a note
+if that is absent locally, and CI enforces it either way.
+
+That third suite exists because of a specific failure: an automated step that no
+test happened to execute carried a missing import, every suite passed, and it only
+broke when a user pressed the button. pyflakes reads every line whether it runs or
+not.
 
 `tests/smoke.py` builds every screen with a stub page and runs each pipeline against
 a fake model, so a broken control or a broken step fails here rather than on a user's
