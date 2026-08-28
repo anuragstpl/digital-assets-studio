@@ -13,6 +13,13 @@ from pathlib import Path
 
 WORK = tempfile.mkdtemp(prefix="aipath-smoke-")
 os.environ["DAS_HOME"] = WORK
+# never the real OS credential store: these suites both read keys (which
+# makes results depend on whoever is running them) and write fixtures over
+# them, which destroys live keys
+os.environ["DAS_KEYVAULT"] = "memory"
+# and never the real analytics dashboard: a key is baked into config.py for
+# release builds, and a test run must not show up as real usage
+os.environ["DAS_TELEMETRY"] = "0"
 os.environ["DAS_STRICT_RENDER"] = "1"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -435,7 +442,14 @@ def test_public_api_surface():
         "digital_assets_studio.core.publishing.youtube":
             ["connect", "connected", "token", "my_channel", "channel_summary", "recent_uploads",
              "upload_video", "set_thumbnail", "upload_caption", "ensure_playlist",
-             "add_to_playlist", "post_comment", "CATEGORIES", "STORE"],
+             "add_to_playlist", "post_comment", "CATEGORIES", "STORE",
+             "accounts", "get_account", "connected_accounts", "add_account", "remove_account",
+             "default_slug", "set_default", "refresh_account", "resolve", "channel_choices",
+             "save_client", "oauth_client", "disconnect", "Account"],
+        "digital_assets_studio.core.publishing.aivideo":
+            ["has_key", "list_models", "video_models", "test", "create_video", "poll_video",
+             "generate_video", "gather", "download", "AIVideoError", "DEFAULT_VIDEO_MODEL",
+             "RESOLUTIONS"],
         "digital_assets_studio.core.publishing.play":
             ["save_service_account", "connected", "publish", "check_access", "Edit", "TRACKS"],
         "digital_assets_studio.core.publishing.appstore":
@@ -592,21 +606,215 @@ def test_stock_photo_ranking():
     assert "Pexels" in credit_line(Photo("u", 1, 1, "pexels", "Jane"))
 
 
+def test_file_and_channel_fields():
+    """The two field types the video work added.
+
+    A file field must stay typeable when the page cannot open a dialog - a
+    headless build, a locked-down desktop - and a select whose options come from
+    the outside world must still draw when that world is empty, or the whole
+    upload step goes blank instead of one box."""
+    from digital_assets_studio.core.pipeline import Field_
+    from digital_assets_studio.ui.components import build_field
+    from digital_assets_studio.ui.studio import Studio
+    from digital_assets_studio.theme import palette
+
+    p = palette(False)
+    seen = {}
+
+    row = build_field(p, Field_("source_video", "Video file", "file",
+                                extensions=["mp4"]), "", lambda k, v: seen.__setitem__(k, v),
+                      browse=None)
+    assert len(row.controls) == 2, "a file field needs its Browse button"
+    assert row.controls[1].on_click is None, "Browse must be inert with no picker"
+
+    picked = build_field(p, Field_("source_folder", "Folder", "folder"), "",
+                         lambda k, v: seen.__setitem__(k, v),
+                         browse=lambda f, cb: cb("D:/exports"))
+    picked.controls[1].on_click(None)
+    assert seen["source_folder"] == "D:/exports", seen
+
+    empty = build_field(p, Field_("yt_channel", "YouTube channel", "select",
+                                  options=["(no channel connected yet)"],
+                                  options_fn=lambda: []), "", lambda k, v: None)
+    assert [o.key for o in empty.options] == ["(no channel connected yet)"],         "an empty live list must fall back to the static options"
+
+    live = build_field(p, Field_("yt_channel", "YouTube channel", "select",
+                                 options=["fallback"],
+                                 options_fn=lambda: ["Main (@main)", "Side (@side)"]),
+                       "Side (@side)", lambda k, v: None)
+    assert live.value == "Side (@side)", live.value
+
+    angry = Field_("yt_channel", "YouTube channel", "select", options=["fallback"],
+                   options_fn=lambda: (_ for _ in ()).throw(RuntimeError("network down")))
+    assert angry.choices() == ["fallback"], "a failing options_fn must not break the form"
+
+    # the picker is lazy, and a page without an overlay must not crash the screen
+    studio = Studio(StubPage())
+    studio.browse_for(Field_("source_video", "Video file", "file"), lambda path: None)
+    assert studio._picker is None, "no picker should have been mounted on a stub page"
+    print("        file and folder browsing, and a channel list that may be empty")
+
+
+def test_a_run_reports_progress_live():
+    """A run must repaint as it goes, not only when it finishes.
+
+    Steps execute on a worker thread. Before this, nothing told the screen that a
+    step had started or ended, so a long run sat on its old statuses looking
+    frozen and then jumped to the finished state - which reads as the app having
+    done nothing until you navigate away and back.
+    """
+    from digital_assets_studio.core import pipeline as pipe
+    from digital_assets_studio.core.events import BUS, TOPIC_STEP
+    from digital_assets_studio.ui.studio import Studio
+
+    seen = []
+    off = BUS.subscribe(TOPIC_STEP, lambda p: seen.append((p["step"], p["status"])))
+    try:
+        proj = pj.create("Live progress", "book", {
+            "category": "Fantasy", "audience": "a", "word_target": 900,
+            "tone": "Literary"})
+        proj.ensure_dirs()
+        pl = get_pipeline("book")
+        pipe.execute(pl, proj, pl.step("concept"), JobContext("t", "t"))
+        assert seen == [("concept", "running"), ("concept", "done")], seen
+
+        seen.clear()
+        boom = pl.step("concept")
+        real, boom.run = boom.run, lambda p, c: (_ for _ in ()).throw(RuntimeError("nope"))
+        try:
+            pipe.execute(pl, proj, boom, JobContext("t", "t"))
+        except RuntimeError:
+            pass
+        finally:
+            boom.run = real
+        assert seen == [("concept", "running"), ("concept", "failed")], seen
+    finally:
+        off()
+
+    # the screen follows a run, and only a run
+    studio = Studio(StubPage())
+    studio.open_project(proj.id)
+    studio.selected_step = "lock"
+    studio._following = False
+    studio._on_step({"project": proj.id, "step": "concept", "status": "running"})
+    assert studio.selected_step == "lock", "a single step must not steal your selection"
+    studio._following = True
+    studio._on_step({"project": proj.id, "step": "concept", "status": "running"})
+    assert studio.selected_step == "concept", "a run should show the step it is on"
+    studio._on_step({"project": "someone-else", "step": "outline", "status": "running"})
+    assert studio.selected_step == "concept", "another project's run must not move this one"
+    print("        running/done/failed announced, and the screen follows a run only")
+
+
+def test_analytics_never_breaks_anything():
+    """Analytics must be invisible to the app, especially with no network.
+
+    The whole point of this test is the offline case: a user on a plane must get
+    the same app as everyone else, so nothing here may block, raise, or be slow.
+    """
+    import time
+    from digital_assets_studio.core import telemetry
+    from digital_assets_studio.core.settings import load as load_settings, save as save_settings
+
+    # with no key configured it is completely inert, whatever else is true
+    real_key, telemetry.app_key = telemetry.app_key, lambda: ""
+    try:
+        assert not telemetry.enabled(), "no key must mean no analytics"
+        telemetry.track("app_started")       # must not raise
+        assert telemetry._queue.qsize() == 0, "nothing should be queued with no key"
+    finally:
+        telemetry.app_key = real_key
+
+    # a dead address stands in for being offline; the suite-wide opt-out is
+    # lifted here and only here, and never points at the real dashboard
+    os.environ["DAS_APTABASE_KEY"] = "A-SH-0000000000"
+    os.environ["DAS_APTABASE_URL"] = "http://127.0.0.1:9"
+    os.environ.pop("DAS_TELEMETRY", None)
+    try:
+        s = load_settings()
+        s.analytics = True
+        save_settings(s)
+        telemetry._stopped = False
+        telemetry._failures = 0
+        assert telemetry.enabled(), "it should be on with a key and consent"
+
+        started = time.time()
+        for i in range(200):                 # far more than the queue holds
+            telemetry.track("app_started", {"n": i})
+        assert time.time() - started < 2.0, "track() blocked the caller"
+
+        # the sender gives up rather than retrying a dead host forever
+        for _ in range(100):
+            if telemetry._stopped:
+                break
+            time.sleep(0.1)
+        assert telemetry._stopped, "it should stop trying after repeated failures"
+        telemetry.track("app_started")       # still safe once stopped
+        telemetry.shutdown(timeout=1.0)
+
+        # every way of saying no
+        s.analytics = False
+        save_settings(s)
+        assert not telemetry.enabled(), "the settings switch must turn it off"
+        s.analytics = True
+        save_settings(s)
+        telemetry._stopped = False
+        for var in ("DO_NOT_TRACK", "DAS_TELEMETRY"):
+            os.environ[var] = "1" if var == "DO_NOT_TRACK" else "0"
+            assert not telemetry.enabled(), f"{var} must turn it off"
+            del os.environ[var]
+    finally:
+        del os.environ["DAS_APTABASE_KEY"], os.environ["DAS_APTABASE_URL"]
+        os.environ["DAS_TELEMETRY"] = "0"      # back under the suite-wide guard
+        telemetry._stopped = False
+
+    # nothing sensitive can leave, whatever a call site passes
+    dirty = telemetry._clean({
+        "kind": "youtube",
+        "api_key": "sk-live-must-never-leave",     # a scalar, but truncated
+        "path": "C:/Users/someone/secret/" + "x" * 200,
+        "draft": {"chapter": "the whole manuscript"},
+        "artifacts": ["a", "b"],
+        "n": 3, "ok": True,
+    })
+    assert dirty["kind"] == "youtube"
+    assert isinstance(dirty["n"], int) and dirty["ok"] is True
+    assert "draft" not in dirty and "artifacts" not in dirty,         "only plain scalars may be sent"
+    assert all(len(str(v)) <= 64 for v in dirty.values()), "values must be truncated"
+
+    event = telemetry._event("app_started", {"kind": "book"})
+    for field in ("timestamp", "sessionId", "eventName", "systemProps", "props"):
+        assert field in event, f"Aptabase requires {field}"
+    blob = json.dumps(event)
+    for leak in (str(Path.home()), "sk-", "provider::"):
+        assert leak not in blob, f"{leak!r} must never appear in an event"
+    print("        inert without a key, non-blocking offline, gives up, leaks nothing")
+
+
 def test_video_engines():
     """Each engine must activate its own steps and leave the others out, and the
     render step must never be blocked by a branch this project is not using."""
     from digital_assets_studio.core import pipeline as pipe
-    from digital_assets_studio.pipelines.youtube.pipeline import (ENGINE_MPT, ENGINE_SLIDES,
-                                                          ENGINE_STOCK)
+    from digital_assets_studio.pipelines.youtube.pipeline import (ENGINE_AI, ENGINE_LOCAL,
+                                                                  ENGINE_MPT, ENGINE_SLIDES,
+                                                                  ENGINE_STOCK, ENGINES)
 
     pl = get_pipeline("youtube")
     base = {"topic": "t", "audience": "a", "language": "English", "format": "Shorts only",
             "theme": "Light and warm", "mode": "Use a channel I already have"}
     expected = {
-        ENGINE_SLIDES: ({"scene_art", "voiceover"}, {"stock_terms", "stock_footage"}),
-        ENGINE_STOCK: ({"stock_terms", "stock_footage", "voiceover"}, {"scene_art"}),
-        ENGINE_MPT: (set(), {"scene_art", "stock_terms", "stock_footage", "voiceover"}),
+        ENGINE_SLIDES: ({"scene_art", "voiceover"},
+                        {"stock_terms", "stock_footage", "ai_clips"}),
+        ENGINE_STOCK: ({"stock_terms", "stock_footage", "voiceover"},
+                       {"scene_art", "ai_clips"}),
+        ENGINE_AI: ({"ai_clips", "voiceover"},
+                    {"scene_art", "stock_terms", "stock_footage"}),
+        ENGINE_MPT: (set(),
+                     {"scene_art", "stock_terms", "stock_footage", "voiceover", "ai_clips"}),
+        ENGINE_LOCAL: (set(),
+                       {"scene_art", "stock_terms", "stock_footage", "voiceover", "ai_clips"}),
     }
+    assert set(expected) == set(ENGINES), "an engine was added without a branching test"
     for engine, (present, absent) in expected.items():
         proj = pj.create(f"Engine {engine[:12]}", "youtube", {**base, "video_engine": engine})
         ids = {s.id for s in pl.active_steps(proj)}
@@ -617,7 +825,8 @@ def test_video_engines():
         blocked = set(pl.blocked(proj, pl.step("render")))
         assert blocked <= (present | {"fix_script"}), \
             f"{engine}: render blocked by a branch it does not use: {blocked}"
-    print("        slides / stock / MoneyPrinterTurbo each activate only their own steps")
+    print("        slides / stock / AI / MoneyPrinterTurbo / own-file each activate "
+          "only their own steps")
 
 
 def test_caption_wrapping():
@@ -731,6 +940,9 @@ if __name__ == "__main__":
     check("the rename migrates old data", test_rename_migration)
     check("cover art has three sources", test_cover_art_sources)
     check("stock photos rank by cover shape", test_stock_photo_ranking)
+    check("a run repaints while it runs", test_a_run_reports_progress_live)
+    check("analytics cannot break the app", test_analytics_never_breaks_anything)
+    check("file pickers and the channel list", test_file_and_channel_fields)
     check("video engines branch correctly", test_video_engines)
     check("captions wrap instead of overflowing", test_caption_wrapping)
     check("printables pipeline", test_printables)

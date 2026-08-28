@@ -15,8 +15,14 @@ log = logging.getLogger(__name__)
 
 APP_NAME = "Digital Assets Studio"
 APP_ID = "digital-assets-studio"
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.6.0"
 TAGLINE = "One suite. Every digital asset."
+
+# Aptabase ingest key for anonymous usage analytics. It is a write-only key and
+# is meant to ship inside the binary; it can neither read the dashboard nor
+# identify anyone. Left blank, the app sends nothing at all - which is what a
+# build from source does unless DAS_APTABASE_KEY is set.
+APTABASE_APP_KEY = "A-US-6846957150"
 
 # --------------------------------------------------------------------------
 # Paths

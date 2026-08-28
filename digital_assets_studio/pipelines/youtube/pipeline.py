@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import math
+import shutil
 from pathlib import Path
 
 from ...config import (ASSETS_DIR, ROLE_IMAGE_PROMPT, ROLE_MARKETING, ROLE_METADATA,
@@ -12,7 +14,7 @@ from ...core.llm import router
 from ...core.pipeline import (AUTO, EXTERNAL, MANUAL, REVIEW, Field_, Link, Pipeline,
                               Step, StepResult)
 from ...core.projects import Project
-from ...core.publishing import mpt, stockvideo, tts, video, youtube as yt
+from ...core.publishing import aivideo, mpt, stockvideo, tts, video, youtube as yt
 from .art import (BrandSpec, render_avatar, render_banner, render_scene, render_thumbnail,
                   save, SLIDE, SLIDE_PORTRAIT)
 
@@ -392,15 +394,84 @@ def _step_stock_footage(p: Project, ctx: JobContext) -> StepResult:
                       [p.rel(f) for f in files[:6]], {"stock_clip_count": len(files)})
 
 
+def _visual_briefs(p: Project, slug: str) -> list[str]:
+    """The per-scene visual direction, as written by the script step."""
+    data = json.loads(p.read_text(f"drafts/episodes/{slug}.json", "{}"))
+    out = []
+    for sc in data.get("scenes", []):
+        brief = (sc.get("b_roll_prompt") or sc.get("heading") or "").strip()
+        if brief:
+            out.append(brief)
+    return out
+
+
+def _narration_seconds(p: Project, slug: str) -> tuple[list[Path], float]:
+    audio = sorted((p.dir / "build" / "voice" / slug).glob("scene_*.mp3"))
+    if not audio:
+        raise RuntimeError("Generate the voiceover first — the footage is cut to its length.")
+    return audio, sum(tts.ffprobe_duration(a) for a in audio)
+
+
+def _step_ai_clips(p: Project, ctx: JobContext) -> StepResult:
+    """Buy a pool of generated clips big enough to cover the narration.
+
+    One clip per scene would be the obvious design and the wrong one: video models
+    charge per second, a twelve-scene episode would cost twelve generations, and
+    the renderer can already spread a smaller pool across the scenes without
+    repeating a clip back to back. So the count is yours to set, and every clip
+    already on disk is reused rather than bought again.
+    """
+    slug, _ = _episode(p)
+    if not aivideo.has_key():
+        raise RuntimeError(
+            "The AI video engine calls OpenRouter and no key is saved.\n\n"
+            "Create one at openrouter.ai/keys, then paste it into "
+            "Settings › Providers › OpenRouter and press Save. The same key serves "
+            "the text roles, so this is not a second subscription.")
+    _, total = _narration_seconds(p, slug)
+    seconds = int(float(p.answer("ai_clip_seconds", 8) or 8))
+    wanted = max(1, int(float(p.answer("ai_clip_count", 0) or 0)))
+    if not p.answer("ai_clip_count"):
+        wanted = max(2, min(8, math.ceil(total / max(seconds, 2))))
+    model = (p.answer("ai_video_model", "") or aivideo.DEFAULT_VIDEO_MODEL).strip()
+    theme = p.answer("theme", "Light and warm")
+    style = (f"Cinematic b-roll, {theme.lower()}, no text or captions anywhere in frame, "
+             f"no logos, no readable signage, steady camera.")
+
+    ctx.progress(0.05, f"Generating {wanted} clips with {model} — this bills per clip")
+    dest = p.dir / "build" / "aiclips" / slug
+    files = aivideo.gather(
+        _visual_briefs(p, slug) or [p.answer("episode_title") or slug],
+        wanted, dest, model=model, seconds=seconds, portrait=_portrait(p),
+        resolution=p.answer("ai_resolution", "720p"), style=style,
+        progress=lambda f, m: ctx.progress(0.05 + f * 0.9, m),
+        note=lambda m, level: ctx.log(m, level))
+
+    if len(files) < wanted:
+        ctx.log(f"{wanted - len(files)} clip(s) did not generate; rendering with the "
+                f"{len(files)} that did.", "warning")
+    covered = len(files) * seconds
+    return StepResult(
+        f"{len(files)} AI clips of {seconds}s from {model} — {covered}s of footage for "
+        f"{total / 60:.1f} minutes of narration, reused across the scenes",
+        [p.rel(f) for f in files[:6]],
+        {"ai_clip_count_made": len(files), "ai_video_model": model})
+
+
 def _render_stock(p: Project, ctx: JobContext, slug: str, portrait: bool,
-                  out: Path) -> None:
+                  out: Path, footage: Path | None = None) -> None:
+    """Lay the narration over a pool of clips — downloaded or generated, the
+    assembly is identical once the mp4s are on disk."""
     data = json.loads(p.read_text(f"drafts/episodes/{slug}.json", "{}"))
     blocks = [data.get("hook", "")] + [x.get("narration", "") for x in data.get("scenes", [])]
     blocks = [b.strip() for b in blocks if b and b.strip()]
     audio = sorted((p.dir / "build" / "voice" / slug).glob("scene_*.mp3"))
-    clips = sorted((p.dir / "build" / "stock" / slug).glob("*.mp4"))
+    source = footage or (p.dir / "build" / "stock" / slug)
+    clips = sorted(source.glob("*.mp4"))
     if not clips:
-        raise RuntimeError("No stock clips downloaded. Run the stock footage step first.")
+        raise RuntimeError(
+            f"No clips in {p.rel(source)}. Run the "
+            f"{'AI footage' if footage else 'stock footage'} step first.")
     burn = bool(p.answer("burn_captions", True))
     scenes = [stockvideo.Scene(a, tts.ffprobe_duration(a),
                                blocks[i][:220] if burn and i < len(blocks) else "")
@@ -433,11 +504,84 @@ def _render_mpt(p: Project, ctx: JobContext, slug: str, portrait: bool, out: Pat
         progress=lambda f, m: ctx.progress(f, m))
 
 
+def _size(path: Path) -> str:
+    """A file size that reads right at both ends — a trimmed clip is not '0 MB'."""
+    mb = path.stat().st_size / 1_048_576
+    return f"{mb:.0f} MB" if mb >= 1 else f"{path.stat().st_size / 1024:.0f} KB"
+
+
+def _pick_local_video(p: Project) -> Path:
+    """The file the 'a video I already have' engine publishes.
+
+    Either a file you pointed at, or the newest video in a folder you pointed at -
+    which is what you want when the export you just made lands in the same place
+    every time.
+    """
+    named = (p.answer("source_video", "") or "").strip()
+    if named:
+        path = Path(named).expanduser()
+        if not path.is_absolute():
+            path = (p.dir / named)
+        if not path.exists():
+            raise RuntimeError(f"No video at {named}. Press Browse on the 'Video file' box "
+                               f"and pick the file you want published.")
+        if path.is_dir():
+            return _newest_in(p, path)
+        return path
+
+    folder = (p.answer("source_folder", "") or "").strip()
+    if folder:
+        return _newest_in(p, Path(folder).expanduser())
+
+    raise RuntimeError(
+        "The 'a video I already have' engine needs a file.\n\n"
+        "Press Browse on 'Video file' and pick one, or point 'Video folder' at a folder "
+        "and this step will take the newest video in it.")
+
+
+def _newest_in(p: Project, folder: Path) -> Path:
+    if not folder.exists():
+        raise RuntimeError(f"No such folder: {folder}")
+    pick = (p.answer("source_folder_pick", "Newest file") or "Newest file")
+    videos = [f for f in folder.iterdir()
+              if f.is_file() and f.suffix.lower() in VIDEO_SUFFIXES]
+    if not videos:
+        raise RuntimeError(
+            f"No video files in {folder}. Looked for "
+            f"{', '.join(VIDEO_SUFFIXES)}.")
+    if pick.startswith("Largest"):
+        videos.sort(key=lambda f: f.stat().st_size, reverse=True)
+    elif pick.startswith("Oldest"):
+        videos.sort(key=lambda f: f.stat().st_mtime)
+    else:
+        videos.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    return videos[0]
+
+
 def _step_render(p: Project, ctx: JobContext) -> StepResult:
     slug, _ = _episode(p)
     engine = _engine(p)
     portrait = _portrait(p)
     out = p.build / f"{slug}.mp4"
+
+    if engine == ENGINE_LOCAL:
+        # Nothing is rendered here: the file is copied into the project so the
+        # upload step, the Short and the artifact list all behave exactly as they
+        # do for a rendered episode, and your original is never touched.
+        source = _pick_local_video(p)
+        ctx.progress(0.2, f"Copying {source.name} into the project")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if source.resolve() != out.resolve():
+            shutil.copy2(source, out)
+        info = video.probe(out)
+        dur = float(info.get("format", {}).get("duration", 0) or 0)
+        return StepResult(
+            f"Using your own file — {source.name}, "
+            + (f"{dur / 60:.1f} minutes, " if dur else "")
+            + f"{_size(out)}. Nothing was re-encoded.",
+            [f"build/{slug}.mp4"],
+            {"video_file": f"build/{slug}.mp4", "video_seconds": round(dur, 1),
+             "source_video_used": str(source)})
 
     if engine != ENGINE_MPT and not video.available():
         raise RuntimeError(
@@ -448,6 +592,9 @@ def _step_render(p: Project, ctx: JobContext) -> StepResult:
 
     if engine == ENGINE_STOCK:
         _render_stock(p, ctx, slug, portrait, out)
+    elif engine == ENGINE_AI:
+        _render_stock(p, ctx, slug, portrait, out,
+                      footage=p.dir / "build" / "aiclips" / slug)
     elif engine == ENGINE_MPT:
         _render_mpt(p, ctx, slug, portrait, out)
     else:
@@ -482,16 +629,40 @@ def _step_render(p: Project, ctx: JobContext) -> StepResult:
                       {"video_file": f"build/{slug}.mp4", "video_seconds": round(dur, 1)})
 
 
+def _upload_path(p: Project, slug: str) -> Path:
+    """The file to publish: what you nominated, or what the render step made."""
+    rel = (p.answer("video_file") or "").strip() or f"build/{slug}.mp4"
+    path = Path(rel).expanduser()
+    if not path.is_absolute():
+        path = p.dir / rel
+    if path.is_dir():
+        path = _newest_in(p, path)
+    if not path.exists():
+        raise RuntimeError(f"No video at {rel}. Run the render step, or press Browse on the "
+                           f"'Video file' box and pick your own edit.")
+    return path
+
+
+def _channel(p: Project, ctx: JobContext) -> str:
+    """Which connected channel this upload goes to.
+
+    Resolving here rather than at the API layer means the run stops with a list of
+    your channels instead of quietly publishing to whichever one signed in first.
+    """
+    slug = yt.resolve(p.answer("yt_channel", ""))
+    acc = yt.get_account(slug)
+    if acc.display:
+        ctx.log(f"Uploading to {acc.display}")
+    return slug
+
+
 def _step_upload(p: Project, ctx: JobContext) -> StepResult:
     slug, _ = _episode(p)
     meta = json.loads(p.read_text(f"drafts/episodes/{slug}.metadata.json", "{}"))
-    rel = p.answer("video_file") or f"build/{slug}.mp4"
-    path = p.dir / rel
-    if not path.exists():
-        raise RuntimeError(f"No rendered video at {rel}. Run the render step, or point the "
-                           f"'video file' field at your own edit.")
+    path = _upload_path(p, slug)
     if not yt.connected():
         ctx.log("Not connected to YouTube yet - a browser window will open for sign-in.")
+    channel = _channel(p, ctx)
     titles = meta.get("titles") or [p.answer("episode_title") or slug]
     title = p.answer("final_title") or titles[0]
     description = meta.get("description", "")
@@ -505,6 +676,7 @@ def _step_upload(p: Project, ctx: JobContext) -> StepResult:
         made_for_kids=bool(p.answer("made_for_kids", False)),
         language=p.answer("yt_language_code", "en"),
         progress=lambda f, m: ctx.progress(0.05 + f * 0.8, m),
+        account=channel,
     )
     video_id = result.get("id", "")
     artifacts = []
@@ -515,7 +687,7 @@ def _step_upload(p: Project, ctx: JobContext) -> StepResult:
         chosen = thumbs[min(max(int(pick or 1), 1), len(thumbs)) - 1]
         try:
             ctx.progress(0.88, "Setting the thumbnail")
-            yt.set_thumbnail(video_id, chosen)
+            yt.set_thumbnail(video_id, chosen, account=channel)
             artifacts.append(str(chosen.relative_to(p.dir)).replace("\\", "/"))
         except Exception as exc:  # noqa: BLE001
             ctx.log(f"Thumbnail not set: {exc}", "warning")
@@ -524,7 +696,8 @@ def _step_upload(p: Project, ctx: JobContext) -> StepResult:
     if srt.exists():
         try:
             ctx.progress(0.92, "Uploading subtitles")
-            yt.upload_caption(video_id, srt, language=p.answer("yt_language_code", "en"))
+            yt.upload_caption(video_id, srt, language=p.answer("yt_language_code", "en"),
+                              account=channel)
         except Exception as exc:  # noqa: BLE001
             ctx.log(f"Subtitles not uploaded: {exc}", "warning")
 
@@ -532,22 +705,24 @@ def _step_upload(p: Project, ctx: JobContext) -> StepResult:
     if playlist:
         try:
             ctx.progress(0.95, f"Adding to playlist {playlist}")
-            yt.add_to_playlist(yt.ensure_playlist(playlist), video_id)
+            yt.add_to_playlist(yt.ensure_playlist(playlist, account=channel), video_id,
+                               account=channel)
         except Exception as exc:  # noqa: BLE001
             ctx.log(f"Playlist not updated: {exc}", "warning")
 
     pinned = meta.get("pinned_comment", "")
     if pinned and p.answer("privacy", "private") == "public":
         try:
-            yt.post_comment(video_id, pinned)
+            yt.post_comment(video_id, pinned, account=channel)
         except Exception as exc:  # noqa: BLE001
             ctx.log(f"Comment not posted: {exc}", "warning")
 
     url = f"https://youtu.be/{video_id}"
     p.write_text(f"build/{slug}.upload.json", json.dumps(result, indent=2)[:20000])
-    return StepResult(f"Uploaded as {p.answer('privacy', 'private')} — {url}",
+    where = yt.get_account(channel).display
+    return StepResult(f"Uploaded as {p.answer('privacy', 'private')} to {where} — {url}",
                       artifacts + [f"build/{slug}.upload.json"],
-                      {"video_url": url, "video_id": video_id})
+                      {"video_url": url, "video_id": video_id, "uploaded_to": where})
 
 
 def _step_short(p: Project, ctx: JobContext) -> StepResult:
@@ -560,16 +735,17 @@ def _step_short(p: Project, ctx: JobContext) -> StepResult:
     if fresh and engine == ENGINE_STOCK:
         ctx.progress(0.2, "Composing a native vertical cut from the same footage")
         _render_stock(p, ctx, slug, True, out)
+    elif fresh and engine == ENGINE_AI:
+        ctx.progress(0.2, "Composing a vertical cut from the generated footage")
+        _render_stock(p, ctx, slug, True, out, footage=p.dir / "build" / "aiclips" / slug)
     elif fresh and engine == ENGINE_MPT:
         ctx.progress(0.2, "Asking MoneyPrinterTurbo for a 9:16 version")
         _render_mpt(p, ctx, slug, True, out)
     else:
-        source = p.dir / (p.answer("video_file") or f"build/{slug}.mp4")
-        if not source.exists():
-            raise RuntimeError("Render the long-form video first.")
+        source = _upload_path(p, slug)
         if fresh:
-            ctx.log("A fresh vertical render needs the stock or MoneyPrinterTurbo engine; "
-                    "cropping the long video instead.", "warning")
+            ctx.log("A fresh vertical render needs the stock, AI or MoneyPrinterTurbo "
+                    "engine; cropping the long video instead.", "warning")
         start_at = float(p.answer("short_start", 0) or 0)
         dur = float(p.answer("short_seconds", 45) or 45)
         srt = p.dir / "build" / "voice" / f"{slug}.srt"
@@ -579,6 +755,7 @@ def _step_short(p: Project, ctx: JobContext) -> StepResult:
 
     artifacts = [f"build/{slug}_short.mp4"]
     if p.answer("upload_short", True):
+        channel = _channel(p, ctx)
         ctx.progress(0.75, "Uploading the Short")
         title = (meta.get("titles") or [p.answer("episode_title", "Short")])[0][:95]
         res = yt.upload_video(out, title=f"{title} #Shorts",
@@ -587,16 +764,31 @@ def _step_short(p: Project, ctx: JobContext) -> StepResult:
                               category=p.answer("yt_category", "Education"),
                               privacy=p.answer("privacy", "private"),
                               made_for_kids=bool(p.answer("made_for_kids", False)),
-                              progress=lambda f, m: ctx.progress(0.75 + f * 0.2, m))
-        return StepResult(f"Short uploaded — https://youtu.be/{res.get('id','')}", artifacts,
+                              progress=lambda f, m: ctx.progress(0.75 + f * 0.2, m),
+                              account=channel)
+        return StepResult(f"Short uploaded to {yt.get_account(channel).display} — "
+                          f"https://youtu.be/{res.get('id','')}", artifacts,
                           {"short_url": f"https://youtu.be/{res.get('id','')}"})
     return StepResult("Short built and ready to upload", artifacts)
 
 
 ENGINE_SLIDES = "Designed slides (built in)"
 ENGINE_STOCK = "Stock footage (Pexels / Pixabay)"
+ENGINE_AI = "AI video (OpenRouter models)"
 ENGINE_MPT = "MoneyPrinterTurbo server"
-ENGINES = [ENGINE_SLIDES, ENGINE_STOCK, ENGINE_MPT]
+ENGINE_LOCAL = "A video I already have"
+ENGINES = [ENGINE_SLIDES, ENGINE_STOCK, ENGINE_AI, ENGINE_MPT, ENGINE_LOCAL]
+
+ENGINE_HELP = (
+    "Designed slides need nothing but ffmpeg. Stock footage needs a free Pexels or "
+    "Pixabay key. AI video generates original footage through OpenRouter — the best "
+    "looking option and the only one that costs real money per video. "
+    "MoneyPrinterTurbo needs its own server running. "
+    "“A video I already have” skips rendering entirely and publishes a file from your "
+    "own disk — see Settings › Publishing."
+)
+
+VIDEO_SUFFIXES = (".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi")
 
 NEW_CHANNEL = "Create a new channel"
 EXISTING_CHANNEL = "Use a channel I already have"
@@ -614,13 +806,22 @@ def _uses_stock(p: Project) -> bool:
     return _engine(p) == ENGINE_STOCK
 
 
+def _uses_ai(p: Project) -> bool:
+    return _engine(p) == ENGINE_AI
+
+
 def _uses_mpt(p: Project) -> bool:
     return _engine(p) == ENGINE_MPT
 
 
+def _uses_local(p: Project) -> bool:
+    return _engine(p) == ENGINE_LOCAL
+
+
 def _needs_local_voice(p: Project) -> bool:
-    """MoneyPrinterTurbo does its own narration; the other engines need ours."""
-    return not _uses_mpt(p)
+    """MoneyPrinterTurbo narrates its own script, and a video you edited elsewhere
+    already has whatever audio you gave it. The rest need our voiceover."""
+    return not (_uses_mpt(p) or _uses_local(p))
 
 
 def _portrait(p: Project) -> bool:
@@ -639,8 +840,9 @@ def _step_link_channel(p: Project, ctx: JobContext) -> StepResult:
     """Read the channel you already run, straight from the API."""
     if not yt.connected():
         ctx.log("Not connected yet — a browser window will open for sign-in.")
+    channel = _channel(p, ctx)
     try:
-        info = yt.channel_summary()
+        info = yt.channel_summary(account=channel)
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(
             f"{exc}\n\nConnect the account in Settings › Publishing › YouTube. "
@@ -664,7 +866,8 @@ def _step_link_channel(p: Project, ctx: JobContext) -> StepResult:
         f"If that is the wrong channel, disconnect in Settings and sign in choosing the right one.",
         ["drafts/channel.md"],
         {"channel_name": info.get("title", ""), "handle": handle,
-         "channel_id": info.get("id", "")})
+         "channel_id": info.get("id", ""),
+         "yt_channel": yt.get_account(channel).display})
 
 
 def _step_analyse(p: Project, ctx: JobContext) -> StepResult:
@@ -673,7 +876,7 @@ def _step_analyse(p: Project, ctx: JobContext) -> StepResult:
     info = _json(p, "channel.json")
     ctx.progress(0.2, "Reading the last uploads")
     try:
-        uploads = yt.recent_uploads(25)
+        uploads = yt.recent_uploads(25, account=_channel(p, ctx))
     except Exception as exc:  # noqa: BLE001
         ctx.log(f"Could not read the uploads list ({exc}); working from the About text alone",
                 "warning")
@@ -788,10 +991,7 @@ YOUTUBE_PIPELINE = Pipeline(
                default="Light and warm"),
         Field_("credibility", "Why should anyone believe you", "multiline"),
         Field_("video_engine", "Video engine", "select", options=ENGINES,
-                            default=ENGINE_SLIDES,
-                            help="Designed slides need nothing but ffmpeg. Stock footage needs "
-                                 "a free Pexels or Pixabay key. MoneyPrinterTurbo needs its own "
-                                 "server running — see Settings › Publishing."),
+               default=ENGINE_SLIDES, help=ENGINE_HELP),
     ],
     steps=[
         Step("channel_link", "Link your channel", "Channel", AUTO, run=_step_link_channel,
@@ -937,21 +1137,55 @@ YOUTUBE_PIPELINE = Pipeline(
                  Field_("clip_seconds", "Seconds per clip", "number", default=5),
              ],
              produces=["build/stock"], run_label="Fetch stock clips"),
+        Step("ai_clips", "Generate the AI footage", "Content", AUTO, run=_step_ai_clips,
+             requires=["script", "voiceover"], applies_when=_uses_ai,
+             summary="Original footage from a video model on OpenRouter — Veo, Sora, Kling, "
+                     "Seedance and the rest behind one key. The clips are reused across the "
+                     "scenes, so you decide how many to buy.",
+             fields=[
+                 Field_("ai_video_model", "Video model", default=aivideo.DEFAULT_VIDEO_MODEL,
+                        help="An OpenRouter model id. Press 'List video models' in "
+                             "Settings › Publishing › AI video to see what it serves today, "
+                             "and what each one costs."),
+                 Field_("ai_clip_seconds", "Seconds per clip", "number", default=8,
+                        help="Most models cap out around 8–10 seconds and bill per second."),
+                 Field_("ai_clip_count", "How many clips to generate", "number", default=0,
+                        help="0 works it out from the narration length, capped at 8. Every "
+                             "clip is a separate charge, and clips already on disk are "
+                             "never bought twice."),
+                 Field_("ai_resolution", "Resolution", "select",
+                        options=aivideo.RESOLUTIONS, default="720p",
+                        help="720p is a fraction of the price and survives the YouTube "
+                             "re-encode perfectly well."),
+             ],
+             produces=["build/aiclips"], run_label="Generate AI footage",
+             cost_hint="Billed per clip by OpenRouter — the only step here that costs "
+                       "more than pennies"),
         Step("render", "Render the video", "Content", AUTO, run=_step_render,
-             requires=["voiceover", "scene_art", "stock_footage", "fix_script"],
-             summary="Designed slides, stock footage, or a MoneyPrinterTurbo server — whichever "
-                     "engine this project uses. Captions are cut to the narration either way.",
+             requires=["voiceover", "scene_art", "stock_footage", "ai_clips", "fix_script"],
+             summary="Designed slides, stock footage, generated footage, a MoneyPrinterTurbo "
+                     "server, or a file you cut yourself — whichever engine this project uses. "
+                     "Captions are cut to the narration either way.",
              fields=[
                  Field_("video_engine", "Video engine", "select", options=ENGINES,
-                            default=ENGINE_SLIDES,
-                            help="Designed slides need nothing but ffmpeg. Stock footage needs "
-                                 "a free Pexels or Pixabay key. MoneyPrinterTurbo needs its own "
-                                 "server running — see Settings › Publishing."),
+                        default=ENGINE_SLIDES, help=ENGINE_HELP),
                  Field_("orientation", "Orientation", "select",
                         options=["Landscape 16:9", "Portrait 9:16"], default="Landscape 16:9"),
                  Field_("burn_captions", "Burn captions into the picture", "switch", default=True),
-                 Field_("music_path", "Background music file",
+                 Field_("music_path", "Background music file", "file",
+                        extensions=["mp3", "wav", "m4a", "aac", "ogg", "flac"],
                         help="Optional. Ducked to -22 dB under the narration."),
+                 Field_("source_video", "Video file", "file", extensions=list(
+                            s.lstrip(".") for s in VIDEO_SUFFIXES),
+                        help="Only used by “A video I already have”. Browse to the file you "
+                             "want published; it is copied in, never re-encoded."),
+                 Field_("source_folder", "Video folder", "folder",
+                        help="Only used by “A video I already have”, and only when the file "
+                             "above is blank: point it at the folder your editor exports to "
+                             "and this step takes one video from it."),
+                 Field_("source_folder_pick", "Which file in that folder", "select",
+                        options=["Newest file", "Oldest file", "Largest file"],
+                        default="Newest file"),
              ],
              produces=["build/*.mp4"], run_label="Render video",
              cost_hint="CPU-bound — roughly real time per minute of video"),
@@ -1034,6 +1268,13 @@ YOUTUBE_PIPELINE = Pipeline(
              requires=["metadata", "render"],
              summary="Resumable upload, then thumbnail, subtitles, playlist and pinned comment.",
              fields=[
+                 Field_("yt_channel", "YouTube channel", "select",
+                        options_fn=yt.channel_choices,
+                        options=["(no channel connected yet)"],
+                        help="Which connected channel this goes to; the starred one in "
+                             "Settings is used until you pick another. Connect as many as "
+                             "you run there — one sign-in each, because a YouTube token is "
+                             "tied to a single channel and cannot be switched per upload."),
                  Field_("final_title", "Title", help="Blank uses the first title the metadata step wrote."),
                  Field_("privacy", "Visibility", "select",
                         options=["private", "unlisted", "public"], default="private",
@@ -1046,19 +1287,26 @@ YOUTUBE_PIPELINE = Pipeline(
                         help="Answer honestly — this one is a legal declaration, not a preference."),
                  Field_("playlist_name", "Add to playlist"),
                  Field_("thumbnail_choice", "Thumbnail variant", "number", default=1),
-                 Field_("video_file", "Video file",
-                        help="Blank uses the rendered one. Point it at your own edit if you cut it elsewhere."),
+                 Field_("video_file", "Video file", "file",
+                        extensions=list(s.lstrip(".") for s in VIDEO_SUFFIXES),
+                        help="Blank uses the rendered one. Browse to your own edit if you cut "
+                             "it elsewhere — a folder works too, and the newest video in it "
+                             "is taken."),
              ],
              run_label="Upload to YouTube"),
         Step("shorts", "Cut and upload the Short", "Publish", AUTO, run=_step_short,
              requires=["render"], optional=True,
              summary="Vertical crop with burned subtitles, uploaded with the same metadata.",
              fields=[
+                 Field_("yt_channel", "YouTube channel", "select",
+                        options_fn=yt.channel_choices,
+                        options=["(no channel connected yet)"],
+                        help="The same channel the long-form upload uses."),
                  Field_("short_mode", "How to make it", "select",
                         options=["Cut from the long video", "Generate a fresh vertical video"],
                         default="Cut from the long video",
-                        help="A fresh vertical render needs the stock or MoneyPrinterTurbo engine; "
-                             "with designed slides it falls back to cropping."),
+                        help="A fresh vertical render needs the stock, AI or MoneyPrinterTurbo "
+                             "engine; with designed slides it falls back to cropping."),
                  Field_("short_start", "Start at (seconds)", "number", default=0,
                         help="The metadata step names which moment to cut."),
                  Field_("short_seconds", "Length (seconds)", "number", default=45),

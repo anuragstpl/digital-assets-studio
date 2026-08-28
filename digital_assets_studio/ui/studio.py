@@ -13,7 +13,8 @@ import flet as ft
 from ..config import APP_NAME, APP_VERSION, WORKSPACE
 from ..core import pipeline as pipe
 from ..core import projects as pj
-from ..core.events import BUS, TOPIC_LOG
+from ..core import telemetry
+from ..core.events import BUS, TOPIC_LOG, TOPIC_STEP
 from ..core.jobs import RUNNER
 from ..core.settings import load as load_settings, save as save_settings
 from ..pipelines import PIPELINES, get as get_pipeline
@@ -55,7 +56,15 @@ class Studio:
         self.log_column: ft.Column | None = None
         self.step_rows: dict[str, dict] = {}
         self._body = ft.Container(expand=True)
+        # one picker for the whole app; the callback is swapped per use, because
+        # Flet delivers the result to whichever handler the control carries
+        self._picker: ft.FilePicker | None = None
+        self._picker_cb = None
+        # true only while a multi-step run is driving the screen, so following
+        # the run never fights a step you picked yourself
+        self._following = False
         BUS.subscribe(TOPIC_LOG, self._on_log)
+        BUS.subscribe(TOPIC_STEP, self._on_step)
 
     # -------------------------------------------------------------- palette --
     @property
@@ -84,6 +93,29 @@ class Studio:
                 pass
         self._safe_update()
 
+    # -------------------------------------------------------- step progress --
+    def _on_step(self, payload) -> None:
+        """Repaint as each step starts and finishes.
+
+        Steps run on a worker thread and the screen has no other way to know one
+        moved: without this the list sits on its old statuses for the whole run
+        and only catches up when the job ends, which reads as nothing happening.
+        A run that is under way also drags the selection along with it, so the
+        step you are looking at is the one being worked on.
+        """
+        if not isinstance(payload, dict) or self.route != "project":
+            return
+        if self.project is None or payload.get("project") != self.project.id:
+            return
+        step_id = payload.get("step") or ""
+        if self._following and payload.get("status") == pj.RUNNING and step_id:
+            self.selected_step = step_id
+            self.log_column = None      # the detail pane is about to be rebuilt
+        try:
+            self.update_panes(header=True)
+        except Exception:  # noqa: BLE001 - a repaint must never kill the run
+            log.exception("live step repaint failed")
+
     # ----------------------------------------------------------- navigation --
     def navigate(self, route: str) -> None:
         self.route = route
@@ -96,6 +128,8 @@ class Studio:
         self.navigate("new")
 
     def create_project(self, name: str, pipeline_id: str, answers: dict) -> None:
+        # which kinds of asset people actually start; no name, no answers
+        telemetry.track("project_created", {"kind": pipeline_id})
         proj = pj.create(name, pipeline_id, answers)
         proj.ensure_dirs()
         self.open_project(proj.id)
@@ -130,8 +164,16 @@ class Studio:
             return
         try:
             self.pane_detail.content = pipeline_view.step_detail(self)
-            # rows are restyled, never rebuilt - rebuilding resets the list's scroll
-            pipeline_view.refresh_rows(self)
+            # rows are restyled, never rebuilt - rebuilding resets the list's scroll.
+            # The exception is a run that changed which steps apply at all: those
+            # rows do not exist yet, so there is nothing to restyle.
+            if self.pipeline is not None and self.project is not None and set(
+                    self.step_rows or {}) != {s.id for s in
+                                              self.pipeline.active_steps(self.project)}:
+                if self.pane_list is not None:
+                    self.pane_list.content = pipeline_view.step_list(self)
+            else:
+                pipeline_view.refresh_rows(self)
             if header and self.pane_header is not None:
                 self.pane_header.content = pipeline_view.header(self)
             self._safe_update()
@@ -148,6 +190,63 @@ class Studio:
             return
         self.project.set_answer(key, value)
         self.project.save()
+
+    # ------------------------------------------------------- file browsing --
+    def _ensure_picker(self) -> "ft.FilePicker | None":
+        """Mount the OS file dialog once, lazily.
+
+        It lives in page.overlay rather than in the form, so it survives every
+        pane redraw - a picker rebuilt underneath an open dialog never returns.
+        Headless test pages have no overlay; those get a typeable box instead.
+        """
+        if self._picker is not None:
+            return self._picker
+        try:
+            picker = ft.FilePicker(on_result=self._on_picked)
+            self.page.overlay.append(picker)
+            self.page.update()
+        except Exception:  # noqa: BLE001
+            log.exception("no file picker available on this page")
+            return None
+        self._picker = picker
+        return picker
+
+    def _on_picked(self, e) -> None:
+        cb, self._picker_cb = self._picker_cb, None
+        if cb is None:
+            return
+        path = ""
+        files = getattr(e, "files", None)
+        if files:
+            path = getattr(files[0], "path", "") or ""
+        else:
+            path = getattr(e, "path", "") or ""
+        if not path:
+            return          # cancelled
+        try:
+            cb(path)
+        except Exception:  # noqa: BLE001
+            log.exception("file picker callback failed")
+        self._safe_update()
+
+    def browse_for(self, field, on_pick) -> None:
+        """Open the dialog for one file/folder field and hand the path back."""
+        picker = self._ensure_picker()
+        if picker is None:
+            self.toast("This build cannot open a file dialog — type or paste the path instead.",
+                       "warn")
+            return
+        self._picker_cb = on_pick
+        try:
+            if field.type == "folder":
+                picker.get_directory_path(dialog_title=f"Choose a folder for {field.label}")
+            else:
+                picker.pick_files(
+                    dialog_title=f"Choose {field.label}", allow_multiple=False,
+                    allowed_extensions=list(field.extensions) or None)
+        except Exception as exc:  # noqa: BLE001
+            self._picker_cb = None
+            self.toast(f"Could not open the file dialog: {exc}", "error")
 
     def toggle_check(self, step_id: str, item: str, on: bool) -> None:
         if self.project is None:
@@ -234,6 +333,7 @@ class Studio:
             return
         self.step_log = []
         self.log_column = None
+        self._following = True
         pl, proj = self.pipeline, self.project
 
         def work(ctx):
@@ -242,6 +342,7 @@ class Studio:
                                 include_optional=autopilot)
 
         def done(update):
+            self._following = False
             if update.status != "done":
                 self.toast(update.message, "error")
                 return

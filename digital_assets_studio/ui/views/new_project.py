@@ -18,7 +18,8 @@ def build(studio) -> ft.Control:
                       hint="What you will call this in the projects list",
                       on_change=lambda e: draft.update({"__name": e.control.value}))
 
-    fields = [build_field(p, f, draft.get(f.key, f.default), lambda k, v: draft.update({k: v}))
+    fields = [build_field(p, f, draft.get(f.key, f.default), lambda k, v: draft.update({k: v}),
+                          browse=studio.browse_for)
               for f in pl.intake]
 
     def create(e):

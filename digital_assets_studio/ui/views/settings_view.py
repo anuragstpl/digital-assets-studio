@@ -6,7 +6,7 @@ import flet as ft
 from ...config import ALL_ROLES, IMAGE_ROLES, TEXT_ROLES
 from ...core import keyvault
 from ...core.llm import router
-from ...core.publishing import appstore, mpt, play, stockvideo, tts, video
+from ...core.publishing import aivideo, appstore, mpt, play, stockvideo, tts, video
 from ...core.publishing import browser as browser_mod
 from ...core.publishing import youtube as yt
 from ...core.settings import (IMAGE_KINDS, load as load_settings, retarget_unkeyed_roles,
@@ -238,29 +238,104 @@ def _status_line(p, ok: bool, ok_text: str, no_text: str) -> ft.Control:
     ], spacing=8)
 
 
-def _publishing(studio, s) -> ft.Control:
+def _channel_row(studio, acc, is_default: bool) -> ft.Control:
+    """One connected channel, with the two things you can do to it."""
     p = studio.palette
 
-    # ---- YouTube
-    cid, csec = yt.STORE.client()
+    def make_default(e):
+        yt.set_default(acc.slug)
+        snack(studio.page, p, f"{acc.display} is now the default channel", "ok")
+        studio.refresh()
+
+    def forget(e):
+        yt.remove_account(acc.slug)
+        snack(studio.page, p, f"Disconnected {acc.display}", "ok")
+        studio.refresh()
+
+    def recheck(e):
+        studio.submit(f"Read {acc.display}",
+                      lambda ctx, slug=acc.slug: yt.refresh_account(slug),
+                      lambda u: (studio.toast(
+                          f"Now reading as {u.result.display}" if u.status == "done"
+                          else u.message, "ok" if u.status == "done" else "error"),
+                          studio.refresh()))
+
+    actions: list[ft.Control] = []
+    if not is_default:
+        actions.append(ghost_button(p, "Make default", make_default,
+                                    ft.Icons.STAR_OUTLINE_ROUNDED))
+    actions.append(ghost_button(p, "Re-read", recheck, ft.Icons.REFRESH_ROUNDED))
+    actions.append(ghost_button(p, "Disconnect", forget, ft.Icons.LINK_OFF_ROUNDED, danger=True))
+
+    return ft.Container(
+        content=ft.Row([
+            ft.Icon(ft.Icons.SMART_DISPLAY_ROUNDED, size=17, color=p.video),
+            ft.Column([
+                ft.Row([ft.Text(acc.title or acc.label or acc.slug, size=14,
+                                weight=ft.FontWeight.W_600, color=p.text),
+                        pill(p, "default", p.ok) if is_default else ft.Container(width=0)],
+                       spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Text(acc.handle or acc.channel_id or "signed in, channel not read yet",
+                        size=11, color=p.text_faint),
+            ], spacing=2, tight=True, expand=True),
+            ft.Row(actions, spacing=6, wrap=True, run_spacing=6),
+        ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        padding=ft.padding.symmetric(10, 12), border_radius=RADIUS_SM, bgcolor=p.surface_alt)
+
+
+def _youtube(studio) -> ft.Control:
+    """The YouTube card: one OAuth client, as many channels as you run.
+
+    A YouTube token is bound to one channel - the picker in the browser is what
+    chooses it - so several channels means several sign-ins through the same
+    client, listed here, and the upload step picks between them.
+    """
+    p = studio.palette
+    cid, csec = yt.oauth_client()
     yt_id = text_field(p, "OAuth client ID", cid)
     yt_secret = text_field(p, "OAuth client secret", csec, password=True)
+    live = yt.connected_accounts()
+    default = yt.default_slug()
 
     def save_yt(e):
-        yt.STORE.save_client(yt_id.value.strip(), yt_secret.value.strip())
+        yt.save_client(yt_id.value.strip(), yt_secret.value.strip())
         snack(studio.page, p, "YouTube client saved", "ok")
         studio.refresh()
 
-    def connect_yt(e):
+    def connect_first(e):
         studio.submit("Connect YouTube", lambda ctx: yt.connect(),
                       lambda u: studio.after_connect(u, "YouTube"))
 
-    youtube_card = card(
-        p,
+    def connect_another(e):
+        if not cid or not csec:
+            snack(studio.page, p, "Save the OAuth client ID and secret first.", "error")
+            return
+
+        def work(ctx):
+            acc = yt.add_account("")
+            ctx.log("Sign in with the Google account that owns the channel you want, "
+                    "and pick that channel on the chooser.")
+            return yt.connect(acc.slug)
+
+        studio.submit("Connect another channel", work,
+                      lambda u: studio.after_connect(u, "The channel"))
+
+    rows: list[ft.Control] = [
         ft.Row([h2(p, "YouTube"), pill(p, "uploads, thumbnails, captions", p.video),
                 ft.Container(expand=True)], spacing=8),
-        _status_line(p, yt.connected(), "Connected — uploads run from inside the suite.",
+        _status_line(p, bool(live),
+                     f"{len(live)} channel(s) connected — uploads run from inside the suite."
+                     if live else "",
                      "Not connected yet."),
+    ]
+    if live:
+        rows.append(ft.Column([_channel_row(studio, a, a.slug == default) for a in live],
+                              spacing=6, tight=True))
+        if len(live) > 1:
+            rows.append(body(p, "Each project picks its channel in the 'YouTube channel' box on "
+                                "the upload step. Until it does, the default above is used.",
+                             muted=True, size=12))
+    rows.append(
         body(p, "Enable the YouTube Data API v3 in Google Cloud, then create an OAuth client of "
                 "type Desktop app — the Web type cannot sign in from a desktop app and will be "
                 "rejected. Paste both values here.\n\n"
@@ -268,8 +343,10 @@ def _publishing(studio, s) -> ft.Control:
                 "Testing, Google expires the sign-in after 7 days and uploads start failing with "
                 "invalid_grant a week later. The 'unverified app' warning you then see at sign-in "
                 "is expected — Advanced, then Go to your app.\n\n"
-                "The Google account you pick at sign-in decides which channel receives uploads.",
-             muted=True, size=12),
+                "One sign-in is one channel: the API has no way to switch channels on an upload, "
+                "so if you run several, connect each one and pick between them per project.",
+             muted=True, size=12))
+    rows.append(
         ft.Row([ghost_button(p, "Enable the API",
                              lambda e: studio.open_url(
                                  "https://console.cloud.google.com/apis/library/youtube.googleapis.com"),
@@ -282,12 +359,85 @@ def _publishing(studio, s) -> ft.Control:
                              lambda e: studio.open_url(
                                  "https://console.cloud.google.com/apis/credentials"),
                              ft.Icons.OPEN_IN_NEW_ROUNDED)],
-               spacing=8, wrap=True, run_spacing=8),
-        ft.Row([ft.Container(yt_id, expand=1), ft.Container(yt_secret, expand=1)], spacing=12),
-        ft.Row([primary_button(p, "Save", save_yt, ft.Icons.SAVE_ROUNDED),
-                ghost_button(p, "Connect account", connect_yt, ft.Icons.LINK_ROUNDED),
-                ghost_button(p, "Disconnect", lambda e: (yt.STORE.disconnect(), studio.refresh()),
-                             ft.Icons.LINK_OFF_ROUNDED, danger=True)], spacing=10))
+               spacing=8, wrap=True, run_spacing=8))
+    rows.append(ft.Row([ft.Container(yt_id, expand=1), ft.Container(yt_secret, expand=1)],
+                       spacing=12))
+    rows.append(ft.Row([
+        primary_button(p, "Save", save_yt, ft.Icons.SAVE_ROUNDED),
+        ghost_button(p, "Connect a channel" if not live else "Connect another channel",
+                     connect_first if not live else connect_another, ft.Icons.LINK_ROUNDED),
+    ], spacing=10, wrap=True, run_spacing=8))
+    return card(p, *rows)
+
+
+def _ai_video(studio) -> ft.Control:
+    """OpenRouter as the video engine: the key already lives in Providers, so this
+    card exists to answer the only other question - which model, and at what cost."""
+    p = studio.palette
+    status = ft.Text("", size=12, color=p.text_muted, selectable=True, expand=True)
+    listing = ft.Column([], spacing=3, tight=True)
+
+    def _say(text: str, tone: str = "muted") -> None:
+        status.value = text
+        status.color = {"ok": p.ok, "error": p.danger, "muted": p.text_muted}[tone]
+        studio.page.update()
+
+    def show(models: list[dict]) -> None:
+        listing.controls = [
+            ft.Text(f"{m['id']}"
+                    + (f"  ·  {m['modality']}" if m.get("modality") else ""),
+                    size=11, color=p.text_muted, selectable=True)
+            for m in models[:40]]
+        studio.page.update()
+
+    def list_video(e):
+        _say("Asking OpenRouter what it serves…")
+        studio.submit("List OpenRouter video models",
+                      lambda ctx: aivideo.list_models("video", refresh=True),
+                      lambda u: (show(u.result) if u.status == "done" else None,
+                                 _say(f"{len(u.result)} video models available — paste an id "
+                                      f"into the 'Video model' box on the AI footage step."
+                                      if u.status == "done" else u.message,
+                                      "ok" if u.status == "done" else "error")),
+                      rerender=False)
+
+    def test_key(e):
+        _say("Testing…")
+        studio.submit("Test OpenRouter", lambda ctx: aivideo.test(),
+                      lambda u: _say(str(u.result) if u.status == "done" else u.message,
+                                     "ok" if u.status == "done" else "error"),
+                      rerender=False)
+
+    return card(
+        p,
+        ft.Row([h2(p, "AI video"), pill(p, "video engine", p.video),
+                ft.Container(expand=True)], spacing=8),
+        _status_line(p, aivideo.has_key(),
+                     "OpenRouter key saved — the AI video engine is available.",
+                     "No OpenRouter key yet. Add it in Settings › Providers › OpenRouter."),
+        body(p, "The AI video engine generates original footage through OpenRouter, which puts "
+                "Veo, Sora, Kling, Seedance, Wan, Hailuo and the rest behind the one key you "
+                "already use for text. It is the only engine here that costs real money per "
+                "video: expect a few cents to a few dollars for a short episode depending on "
+                "the model and resolution, so start at 720p with a small clip count and look at "
+                "the result before scaling it up.\n\n"
+                f"The default model is {aivideo.DEFAULT_VIDEO_MODEL}. The catalogue changes "
+                "often — list it here rather than trusting a name that worked last month.",
+             muted=True, size=12),
+        ft.Row([primary_button(p, "List video models", list_video, ft.Icons.MOVIE_ROUNDED),
+                ghost_button(p, "Test key", test_key, ft.Icons.WIFI_TETHERING_ROUNDED),
+                ghost_button(p, "Pricing", lambda e: studio.open_url(
+                    "https://openrouter.ai/models?fmt=table&output_modalities=video"),
+                    ft.Icons.OPEN_IN_NEW_ROUNDED)],
+               spacing=10, wrap=True, run_spacing=8),
+        ft.Row([status]),
+        listing)
+
+
+def _publishing(studio, s) -> ft.Control:
+    p = studio.palette
+
+    youtube_card = _youtube(studio)
 
     # ---- Google Play
     play_key = text_field(p, "Service account JSON", "", multiline=True,
@@ -442,13 +592,41 @@ def _publishing(studio, s) -> ft.Control:
             ft.Container(content=body(p, "Connect once. After that the suite publishes without you "
                                          "retyping anything.", muted=True, size=12),
                          padding=ft.padding.only(bottom=2)),
-            youtube_card, stock_card, mpt_card, play_card, apple_card, tools,
+            youtube_card, stock_card, _ai_video(studio), mpt_card, play_card, apple_card,
+            tools,
             ft.Container(height=24),
         ], spacing=14, scroll=ft.ScrollMode.AUTO, expand=True),
         padding=ft.padding.only(top=16, right=6), expand=True)
 
 
 # -------------------------------------------------------------------- general --
+
+def _analytics(studio, s) -> ft.Control:
+    """One line: the switch, and a link to what it sends.
+
+    Deliberately not a wall of text. The full field-by-field list lives in
+    PRIVACY.md, one click away, which is where anyone who actually wants it will
+    look - but the switch itself stays in plain sight, because software that
+    reports usage should say so where you can see it and turn it off."""
+    p = studio.palette
+
+    def toggle(e):
+        s.analytics = e.control.value
+        save_settings(s)
+
+    return card(
+        p,
+        ft.Row([
+            ft.Switch(value=s.analytics, active_color=p.accent, on_change=toggle),
+            ft.Text("Send anonymous usage data", size=14, color=p.text),
+            ft.Container(expand=True),
+            ghost_button(p, "What's collected",
+                         lambda e: studio.open_url(
+                             "https://github.com/anuragstpl/digital-assets-studio"
+                             "/blob/main/PRIVACY.md"),
+                         ft.Icons.OPEN_IN_NEW_ROUNDED),
+        ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER))
+
 
 def _general(studio, s) -> ft.Control:
     p = studio.palette
@@ -476,6 +654,7 @@ def _general(studio, s) -> ft.Control:
                  ft.Row([ghost_button(p, "Open workspace folder",
                                       lambda e: studio.reveal(str(studio.workspace)),
                                       ft.Icons.FOLDER_OPEN_ROUNDED)], spacing=10)),
+            _analytics(studio, s),
             ft.Container(height=24),
         ], spacing=14, scroll=ft.ScrollMode.AUTO, expand=True),
         padding=ft.padding.only(top=16, right=6), expand=True)

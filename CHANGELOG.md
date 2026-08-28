@@ -2,6 +2,55 @@
 
 All notable changes are recorded here. Versions follow [semantic versioning](https://semver.org).
 
+## [0.6.0]
+
+### Added
+- **Anonymous usage analytics**, sent to Aptabase: app version, OS, architecture,
+  language, and which pipeline or failing step — nothing else. No keys, no
+  project names, no drafts, no paths, no location, and no identifier that
+  survives a restart. On by default with a switch in Settings › General, and
+  `DO_NOT_TRACK=1` / `DAS_TELEMETRY=0` are honoured. It runs on one background
+  thread and is incapable of blocking or breaking the app: with no connection it
+  drops events and gives up for the session. See PRIVACY.md.
+- **AI video engine.** A YouTube project can now generate its own footage through
+  OpenRouter — Veo, Sora, Kling, Seedance, Wan, Hailuo and the rest behind the one
+  key the text roles already use. Each scene's visual brief becomes a clip; the
+  clips are pooled and reused across the scenes rather than bought one per scene,
+  and clips already on disk are never bought twice. Settings › Publishing › AI
+  video lists what OpenRouter currently serves.
+- **Publish a video you made elsewhere.** A new engine skips rendering entirely:
+  point it at a file, or at the folder your editor exports to and let it take the
+  newest video. The file is copied in untouched, then metadata, thumbnails and
+  upload run exactly as they do for a rendered episode.
+- **File and folder pickers** on the steps that take a path — the video file, the
+  export folder, the background music track — instead of typing one.
+- **Several YouTube channels.** Settings › Publishing › YouTube now holds one slot
+  per channel, each with its own sign-in through the same OAuth client, one of
+  them starred as the default. The upload and Shorts steps have a *YouTube channel*
+  box, and both name the channel they published to in their result.
+
+### Changed
+- An upload with no channel chosen now goes to the channel you starred, not to
+  whichever one happened to sign in first, and it refuses rather than guess when
+  several are connected and the starred one is gone.
+
+### Fixed
+- **A run now repaints while it runs.** Steps execute on a worker thread and
+  nothing told the screen when one started or finished, so a long run sat on its
+  old statuses and only caught up at the end. Rows now go to *running* live, the
+  progress count climbs, the activity log streams, and the selection follows the
+  step being worked on.
+- The step list is rebuilt when a run changes which steps apply, instead of only
+  restyling rows that may no longer exist.
+- Re-reading a YouTube channel no longer moves it to the bottom of the list in
+  Settings.
+- A video under 1 MB no longer reports as "0 MB".
+- **The test suites no longer touch the real OS credential store.** They read it
+  — so results depended on whoever ran them — and wrote fixtures over it, which
+  destroyed live keys. Both suites now run against an isolated in-process store
+  (`DAS_KEYVAULT=memory`). This also fixes a test that could open a real Google
+  sign-in on the developer's own account.
+
 ## [0.5.0] — first public release
 
 Seven pipelines, 92 steps, 61 of them automated.

@@ -17,10 +17,22 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from . import telemetry
+from .events import BUS, TOPIC_STEP
 from .jobs import JobContext
 from .projects import DONE, FAILED, PENDING, RUNNING, SKIPPED, Project, _now
 
 log = logging.getLogger(__name__)
+
+
+def _announce(project: Project, step_id: str, status: str) -> None:
+    """Tell whoever is watching that one step changed state.
+
+    Steps run on a worker thread, so without this the screen has nothing to
+    repaint from between them: a twenty-minute run would sit looking frozen and
+    then jump straight to its finished state."""
+    BUS.publish(TOPIC_STEP, {"project": project.id, "step": step_id, "status": status})
+
 
 AUTO, MANUAL = "auto", "manual"
 
@@ -35,12 +47,28 @@ class Field_:
     """One input on a step's form."""
     key: str
     label: str
-    type: str = "text"              # text | multiline | number | select | switch | slug
+    # text | multiline | number | select | switch | slug | file | folder
+    type: str = "text"
     help: str = ""
     options: list[str] = field(default_factory=list)
     default: Any = ""
     required: bool = False
     placeholder: str = ""
+    # A select whose options are only knowable at the time you look at it - the
+    # YouTube channels you have connected, say. Static options stay the fallback,
+    # because a form must still draw when whatever the callable reads is missing.
+    options_fn: Callable[[], list[str]] | None = None
+    extensions: list[str] = field(default_factory=list)   # file pickers only
+
+    def choices(self) -> list[str]:
+        if self.options_fn is None:
+            return list(self.options)
+        try:
+            live = list(self.options_fn() or [])
+        except Exception:  # noqa: BLE001
+            log.exception("options_fn failed for field %s", self.key)
+            return list(self.options)
+        return live or list(self.options)
 
 
 @dataclass
@@ -165,6 +193,7 @@ def execute(pipeline: Pipeline, project: Project, step: Step, ctx: JobContext) -
     state.started_at = _now()
     state.message = ""
     project.save()
+    _announce(project, step.id, RUNNING)
 
     try:
         result = step.run(project, ctx) or StepResult()
@@ -173,6 +202,9 @@ def execute(pipeline: Pipeline, project: Project, step: Step, ctx: JobContext) -
         state.finished_at = _now()
         state.message = str(exc)
         project.save()
+        _announce(project, step.id, FAILED)
+        # the step id only - never the message, which can carry paths and keys
+        telemetry.track("step_failed", {"pipeline": pipeline.id, "step": step.id})
         raise
 
     state.status = DONE
@@ -182,6 +214,7 @@ def execute(pipeline: Pipeline, project: Project, step: Step, ctx: JobContext) -
     if result.answers:
         project.answers.update(result.answers)
     project.save()
+    _announce(project, step.id, DONE)
     return result
 
 
@@ -191,6 +224,7 @@ def mark_manual_done(project: Project, step: Step, note: str = "") -> None:
     st.finished_at = _now()
     st.message = note or "Marked done"
     project.save()
+    _announce(project, step.id, DONE)
 
 
 def reset_step(project: Project, step: Step) -> None:
@@ -204,6 +238,7 @@ def skip_step(project: Project, step: Step) -> None:
     st.finished_at = _now()
     st.message = "Skipped"
     project.save()
+    _announce(project, step.id, SKIPPED)
 
 
 __all__ = [

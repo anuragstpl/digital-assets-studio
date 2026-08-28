@@ -57,5 +57,5 @@ BUS = EventBus()
 TOPIC_LOG = "log"                  # payload: LogRecordLite
 TOPIC_JOB = "job"                  # payload: JobUpdate
 TOPIC_PROJECTS = "projects"        # payload: None (list changed)
-TOPIC_STEP = "step"                # payload: (project_id, step_id)
+TOPIC_STEP = "step"                # payload: {"project", "step", "status"}
 TOPIC_SETTINGS = "settings"        # payload: None

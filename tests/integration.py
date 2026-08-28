@@ -17,6 +17,13 @@ from pathlib import Path
 
 WORK = tempfile.mkdtemp(prefix="das-integration-")
 os.environ["DAS_HOME"] = WORK
+# never the real OS credential store: these suites both read keys (which
+# makes results depend on whoever is running them) and write fixtures over
+# them, which destroys live keys
+os.environ["DAS_KEYVAULT"] = "memory"
+# and never the real analytics dashboard: a key is baked into config.py for
+# release builds, and a test run must not show up as real usage
+os.environ["DAS_TELEMETRY"] = "0"
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
@@ -65,7 +72,7 @@ def _youtube_api(api: MockAPI):
     from digital_assets_studio.core.publishing import youtube as yt
     yt.API = api.base + "/youtube/v3"
     yt.UPLOAD = api.base + "/upload/youtube/v3"
-    yt.token = lambda: "test-token"
+    yt.token = lambda account="": "test-token"
     return yt
 
 
@@ -1035,6 +1042,345 @@ def test_kdp_browser_without_playwright():
         browser.available = real
 
 
+# ========================================================= AI video ========
+
+MODEL_LIST = {"data": [
+    {"id": "google/veo-3.1-fast", "name": "Veo 3.1 Fast",
+     "architecture": {"modality": "text+image->video", "output_modalities": ["video"]},
+     "pricing": {"prompt": "0"}},
+    {"id": "openai/sora-2-pro", "name": "Sora 2 Pro",
+     "architecture": {"modality": "text+image->video", "output_modalities": ["video"]},
+     "pricing": {}},
+    {"id": "some/text-model", "name": "Text",
+     "architecture": {"modality": "text->text", "output_modalities": ["text"]},
+     "pricing": {}},
+]}
+
+
+def _aivideo(api: MockAPI, clip: bytes | None = None):
+    """Point the OpenRouter client at the mock, with a key that never touches the
+    real credential store - clobbering the user's own key would be a rude test."""
+    from digital_assets_studio.core.publishing import aivideo as av
+    av.BASE = api.base + "/api/v1"
+    av.api_key = lambda: "or-test-key"
+    av._catalogue.clear()
+    api.json_route("GET", r"/api/v1/models", MODEL_LIST)
+    return av
+
+
+def test_aivideo_model_catalogue():
+    """The catalogue is filtered by what a model actually emits, and cached."""
+    with MockAPI() as api:
+        av = _aivideo(api)
+        assert av.video_models() == ["google/veo-3.1-fast", "openai/sora-2-pro"], \
+            "text-only models must not appear in the video list"
+        assert api.one("GET", "/api/v1/models").query["output_modalities"] == "video"
+        av.video_models()
+        assert len(api.sent("GET", "/api/v1/models")) == 1, "the catalogue must be cached"
+        av.video_models(refresh=True)
+        assert len(api.sent("GET", "/api/v1/models")) == 2, "refresh must re-ask"
+
+
+def test_aivideo_generate_polls_then_downloads():
+    """Generation is asynchronous: queue, poll until completed, then fetch the mp4."""
+    with MockAPI() as api:
+        av = _aivideo(api)
+        payload = b"m" * 40_000
+        polls = {"n": 0}
+
+        @api.route("POST", r"/api/v1/videos$")
+        def start(req, m):
+            return 200, {"Content-Type": "application/json"}, json.dumps(
+                {"id": "job1", "status": "pending",
+                 "polling_url": api.base + "/api/v1/videos/job1"}).encode()
+
+        @api.route("GET", r"/api/v1/videos/job1$")
+        def status(req, m):
+            polls["n"] += 1
+            if polls["n"] < 2:
+                return 200, {"Content-Type": "application/json"}, b'{"id":"job1","status":"in_progress"}'
+            body = {"id": "job1", "status": "completed",
+                    "unsigned_urls": [api.base + "/api/v1/videos/job1/content?index=0"]}
+            return 200, {"Content-Type": "application/json"}, json.dumps(body).encode()
+
+        @api.route("GET", r"/api/v1/videos/job1/content")
+        def content(req, m):
+            return 200, {"Content-Type": "video/mp4"}, payload
+
+        dest = Path(WORK) / "ai" / "clip.mp4"
+        av.generate_video("a market stall at dawn", dest, model="google/veo-3.1-fast",
+                          seconds=8, portrait=True, resolution="720p", poll_seconds=0)
+        assert dest.read_bytes() == payload, "the downloaded clip is not what was served"
+        assert polls["n"] >= 2, "it must actually poll rather than assume success"
+
+        body = api.one("POST", "/api/v1/videos").json()
+        assert body["model"] == "google/veo-3.1-fast", body
+        assert body["aspect_ratio"] == "9:16", "portrait must be requested as 9:16"
+        assert body["duration"] == 8 and body["resolution"] == "720p", body
+        assert body["generate_audio"] is False, "our own narration goes over the top"
+        auth = api.one("POST", "/api/v1/videos").headers.get("authorization", "")
+        assert auth == "Bearer or-test-key", auth
+
+
+def test_aivideo_failures_are_readable():
+    """A dead job, an empty wallet and a partial batch must all say what happened."""
+    with MockAPI() as api:
+        av = _aivideo(api)
+
+        @api.route("POST", r"/api/v1/videos$")
+        def start(req, m):
+            return 200, {"Content-Type": "application/json"}, json.dumps(
+                {"id": "bad", "status": "pending",
+                 "polling_url": api.base + "/api/v1/videos/bad"}).encode()
+
+        api.json_route("GET", r"/api/v1/videos/bad$",
+                       {"id": "bad", "status": "failed", "error": "content policy"})
+        try:
+            av.generate_video("x", Path(WORK) / "ai" / "no.mp4", poll_seconds=0)
+            raise AssertionError("a failed job should raise")
+        except av.AIVideoError as exc:
+            assert "content policy" in str(exc), str(exc)
+
+    with MockAPI() as api:
+        av = _aivideo(api)
+        api.json_route("POST", r"/api/v1/videos$",
+                       {"error": {"message": "Insufficient credits"}}, status=402)
+        try:
+            av.gather(["a", "b"], 3, Path(WORK) / "ai2", poll_seconds=0)
+            raise AssertionError("no clips means no render; it must raise")
+        except av.AIVideoError as exc:
+            assert "Insufficient credits" in str(exc), str(exc)
+        assert len(api.sent("POST", "/api/v1/videos")) == 1, \
+            "an empty wallet must stop the batch, not bill three failures"
+
+    from digital_assets_studio.core.publishing import aivideo as av2
+    real = av2.api_key
+    av2.api_key = lambda: ""
+    try:
+        av2.create_video("x")
+        raise AssertionError("no key should raise")
+    except av2.AIVideoError as exc:
+        assert "Settings" in str(exc), str(exc)
+    finally:
+        av2.api_key = real
+
+
+def test_render_with_ai_engine():
+    """The AI engine end to end: generated clips on disk, real ffmpeg over them."""
+    from digital_assets_studio.core import pipeline as pipe
+    from digital_assets_studio.core.jobs import JobContext
+    from digital_assets_studio.core.publishing import video
+    from digital_assets_studio.pipelines import get as get_pipeline
+
+    tts = _fake_tts()
+    with MockAPI() as api:
+        _aivideo(api)
+        import subprocess
+        clip = Path(WORK) / "aiclip.mp4"
+        subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i",
+                        "testsrc=size=1280x720:rate=30:duration=6", "-c:v", "libx264",
+                        "-pix_fmt", "yuv420p", str(clip)], capture_output=True, check=True)
+        clip_bytes = clip.read_bytes()
+
+        @api.route("POST", r"/api/v1/videos$")
+        def start(req, m):
+            return 200, {"Content-Type": "application/json"}, json.dumps(
+                {"id": "j", "status": "completed",
+                 "polling_url": api.base + "/api/v1/videos/j"}).encode()
+
+        api.json_route("GET", r"/api/v1/videos/j$",
+                       lambda req, m: {"id": "j", "status": "completed",
+                                       "unsigned_urls": [api.base + "/api/v1/videos/j/content"]})
+        api.route("GET", r"/api/v1/videos/j/content")(
+            lambda req, m: (200, {"Content-Type": "video/mp4"}, clip_bytes))
+
+        proj = _youtube_project_for_render("AI video (OpenRouter models)", "AI render")
+        proj.set_answer("ai_clip_count", 2)
+        proj.set_answer("ai_clip_seconds", 6)
+        proj.save()
+        for i, text in enumerate(["The hook line", "First block", "Second block"], start=1):
+            tts.synthesize(text, proj.dir / "build" / "voice" / "ep-r" / f"scene_{i:03d}.mp3")
+
+        pl = get_pipeline("youtube")
+        ids = {s.id for s in pl.active_steps(proj)}
+        assert "ai_clips" in ids and "stock_footage" not in ids, ids
+        for req in ("script", "fix_script", "voiceover"):
+            pipe.mark_manual_done(proj, pl.step(req))
+
+        made = pipe.execute(pl, proj, pl.step("ai_clips"), JobContext("t", "t"))
+        clips = sorted((proj.dir / "build" / "aiclips" / "ep-r").glob("*.mp4"))
+        assert len(clips) == 2, f"expected 2 generated clips, got {len(clips)}"
+        assert "2 AI clips" in made.message, made.message
+        prompt = api.sent("POST", "/api/v1/videos")[0].json()["prompt"]
+        assert "market stall" in prompt, f"the scene brief never reached the model: {prompt}"
+        assert "no text" in prompt, "generated footage must be told not to render text"
+
+        # a second run must not buy the same clips again
+        before = len(api.sent("POST", "/api/v1/videos"))
+        pipe.execute(pl, proj, pl.step("ai_clips"), JobContext("t", "t"))
+        assert len(api.sent("POST", "/api/v1/videos")) == before, \
+            "clips already on disk must not be regenerated"
+
+        result = pipe.execute(pl, proj, pl.step("render"), JobContext("t", "t"))
+        out = proj.dir / "build" / "ep-r.mp4"
+        assert out.exists(), "no video rendered from the generated clips"
+        info = video.probe(out)
+        stream = [s for s in info["streams"] if s["codec_type"] == "video"][0]
+        assert (stream["width"], stream["height"]) == (1080, 1920), stream
+        assert "AI video" in result.message, result.message
+
+
+def test_render_from_a_local_file():
+    """The 'a video I already have' engine: no ffmpeg render, no voiceover, and
+    the original file is left exactly where it was."""
+    from digital_assets_studio.core import pipeline as pipe
+    from digital_assets_studio.core.jobs import JobContext
+    from digital_assets_studio.pipelines import get as get_pipeline
+
+    import subprocess
+    folder = Path(WORK) / "my-exports"
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, seconds in (("old-cut.mp4", 2), ("final-cut.mp4", 3)):
+        subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i",
+                        f"testsrc=size=640x360:rate=24:duration={seconds}",
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", str(folder / name)],
+                       capture_output=True, check=True)
+    (folder / "notes.txt").write_text("not a video")
+    # make the intended pick unambiguously the newest
+    os.utime(folder / "final-cut.mp4", (2_000_000_000, 2_000_000_000))
+
+    pl = get_pipeline("youtube")
+
+    # 1. a folder, newest wins, and non-video files are ignored
+    proj = _youtube_project_for_render("A video I already have", "Local folder")
+    proj.set_answer("source_folder", str(folder))
+    proj.save()
+    ids = {s.id for s in pl.active_steps(proj)}
+    for gone in ("voiceover", "scene_art", "stock_footage", "ai_clips"):
+        assert gone not in ids, f"{gone} should not apply when publishing your own file"
+    pipe.mark_manual_done(proj, pl.step("fix_script"))
+    result = pipe.execute(pl, proj, pl.step("render"), JobContext("t", "t"))
+    out = proj.dir / "build" / "ep-r.mp4"
+    assert out.exists(), "the chosen file was never brought into the project"
+    assert "final-cut.mp4" in result.message, result.message
+    assert proj.answer("video_file") == "build/ep-r.mp4"
+    assert (folder / "final-cut.mp4").exists(), "the original must not be moved"
+
+    # 2. a named file beats the folder
+    proj2 = _youtube_project_for_render("A video I already have", "Local file")
+    proj2.set_answer("source_folder", str(folder))
+    proj2.set_answer("source_video", str(folder / "old-cut.mp4"))
+    proj2.save()
+    pipe.mark_manual_done(proj2, pl.step("fix_script"))
+    result = pipe.execute(pl, proj2, pl.step("render"), JobContext("t", "t"))
+    assert "old-cut.mp4" in result.message, result.message
+
+    # 3. nothing chosen: say so, do not render an empty video
+    proj3 = _youtube_project_for_render("A video I already have", "Local nothing")
+    pipe.mark_manual_done(proj3, pl.step("fix_script"))
+    try:
+        pipe.execute(pl, proj3, pl.step("render"), JobContext("t", "t"))
+        raise AssertionError("with no file chosen it must refuse")
+    except RuntimeError as exc:
+        assert "Browse" in str(exc), str(exc)
+
+
+def test_upload_picks_the_named_channel():
+    """With several channels connected the upload must go to the one the project
+    named - and must refuse rather than guess when it named none."""
+    from digital_assets_studio.core import pipeline as pipe
+    from digital_assets_studio.core.jobs import JobContext
+    from digital_assets_studio.core.publishing import youtube as yt
+    from digital_assets_studio.pipelines import get as get_pipeline
+
+    with MockAPI() as api:
+        _youtube_api(api)
+        tokens: list[str] = []
+        yt.token = lambda account="": (tokens.append(account) or f"token-{account}")
+
+        registry = {"default": "default", "accounts": [
+            {"slug": "default", "label": "Main", "title": "AI Ideas",
+             "handle": "@AIIdeasSolved", "channel_id": "UC1"},
+            {"slug": "second", "label": "Side", "title": "Shop Fixes",
+             "handle": "@ShopFixes", "channel_id": "UC2"},
+        ]}
+        yt.ACCOUNTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        yt.ACCOUNTS_FILE.write_text(json.dumps(registry), "utf-8")
+        # both slots look signed in
+        real_connected = yt.Account.connected
+        yt.Account.connected = property(lambda self: True)
+        try:
+            assert yt.resolve("Shop Fixes (@ShopFixes)") == "second"
+            assert yt.resolve("@ShopFixes") == "second"
+            assert yt.resolve("second") == "second"
+
+            # the picker shows the default first, because that is what a project
+            # that has not chosen yet will actually publish to
+            yt.set_default("second")
+            assert yt.channel_choices() == ["Shop Fixes (@ShopFixes)", "AI Ideas (@AIIdeasSolved)"]
+            assert yt.resolve("") == "second", "a blank must mean the default, not the first"
+            yt.set_default("default")
+            assert yt.channel_choices() == ["AI Ideas (@AIIdeasSolved)", "Shop Fixes (@ShopFixes)"]
+            assert yt.resolve("") == "default"
+
+            # re-reading a channel must not shuffle your own list underneath you
+            before = [a.slug for a in yt.accounts()]
+            acc = yt.get_account("default")
+            acc.title = "Renamed Channel"
+            yt._save_account(acc)
+            assert [a.slug for a in yt.accounts()] == before,                 "saving a channel reordered the list"
+            assert yt.get_account("default").title == "Renamed Channel"
+
+            # default pointing at a channel that is gone: refuse, do not guess
+            yt.set_default("vanished")
+            try:
+                yt.resolve("")
+                raise AssertionError("with no usable default it must not pick one for you")
+            except yt.YouTubeError as exc:
+                assert "Shop Fixes" in str(exc), str(exc)
+            yt.set_default("default")
+            try:
+                yt.resolve("Channel That Left")
+                raise AssertionError("an unknown channel must not fall through to the first")
+            except yt.YouTubeError as exc:
+                assert "Channel That Left" in str(exc), str(exc)
+
+            @api.route("POST", r"/upload/youtube/v3/videos")
+            def start(req, m):
+                return 200, {"Location": api.base + "/resume/y"}, b"{}"
+
+            @api.route("PUT", r"/resume/y")
+            def put(req, m):
+                return 200, {"Content-Type": "application/json"}, json.dumps({"id": "V2"}).encode()
+
+            api.json_route("POST", "/upload/youtube/v3/thumbnails/set", {"items": [{}]})
+            api.json_route("POST", "/upload/youtube/v3/captions", {"id": "c1"})
+
+            proj = _project("youtube", {
+                "topic": "t", "audience": "a", "language": "English", "format": "Shorts only",
+                "theme": "Light and warm", "mode": "Use a channel I already have",
+                "episode_slug": "ep-two", "episode_title": "Episode Two",
+                "yt_channel": "Shop Fixes (@ShopFixes)", "privacy": "unlisted",
+            }, "YT channel pick")
+            proj.write_text("drafts/episodes/ep-two.json",
+                            json.dumps({"hook": "H", "scenes": [{"narration": "B"}]}))
+            proj.write_text("drafts/episodes/ep-two.metadata.json",
+                            json.dumps({"titles": ["Two"], "description": "d", "tags": []}))
+            proj.write_bytes("build/ep-two.mp4", b"v" * 20_000)
+
+            pl = get_pipeline("youtube")
+            for req in ("metadata", "render"):
+                pipe.mark_manual_done(proj, pl.step(req))
+            tokens.clear()
+            result = pipe.execute(pl, proj, pl.step("upload"), JobContext("t", "t"))
+            assert set(tokens) == {"second"}, f"uploaded with the wrong channel: {tokens}"
+            assert "Shop Fixes" in result.message, result.message
+            assert proj.answer("uploaded_to") == "Shop Fixes (@ShopFixes)"
+        finally:
+            yt.Account.connected = real_connected
+            yt.ACCOUNTS_FILE.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     print(f"workspace: {WORK}\n")
     check("youtube: channel read and recent uploads", test_youtube_channel_read)
@@ -1065,6 +1411,13 @@ if __name__ == "__main__":
     check("audio: mastering lands in the ACX window at any length",
           test_mastering_lands_in_window_at_any_length)
     check("pipeline: KDP step without playwright", test_kdp_browser_without_playwright)
+    print()
+    check("openrouter: video model catalogue", test_aivideo_model_catalogue)
+    check("openrouter: generate polls then downloads", test_aivideo_generate_polls_then_downloads)
+    check("openrouter: failures are readable", test_aivideo_failures_are_readable)
+    check("pipeline: AI-video render end to end", test_render_with_ai_engine)
+    check("pipeline: publish a video from your own folder", test_render_from_a_local_file)
+    check("pipeline: upload goes to the chosen channel", test_upload_picks_the_named_channel)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} FAILURE(S)")

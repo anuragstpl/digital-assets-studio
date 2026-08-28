@@ -74,6 +74,7 @@ class Settings:
     routes: dict[str, RoleRoute] = field(default_factory=dict)
     onboarded: bool = False
     ui_revision: int = 0        # bumped when the default look changes
+    analytics: bool = True      # anonymous usage events; see core/telemetry.py
 
     # ------------------------------------------------------------- helpers --
     def provider(self, pid: str) -> ProviderConfig | None:
@@ -119,6 +120,7 @@ def _from_dict(d: dict[str, Any]) -> Settings:
         routes=routes,
         onboarded=d.get("onboarded", False),
         ui_revision=d.get("ui_revision", 0),
+        analytics=d.get("analytics", True),
     )
 
 
@@ -252,6 +254,7 @@ def save(s: Settings | None = None) -> None:
             "default_currency": _settings.default_currency,
             "onboarded": _settings.onboarded,
             "ui_revision": _settings.ui_revision,
+            "analytics": _settings.analytics,
             "providers": [asdict(p) for p in _settings.providers],
             "routes": {k: asdict(v) for k, v in _settings.routes.items()},
         }

@@ -99,19 +99,34 @@ neither library guarantees a model release, and a face on a cover implies that
 person endorses the book. Both licences let you build a cover from the image; they
 do not let you sell the image itself.
 
-### Three video engines
+### Five video engines
 
-A YouTube project picks one, and the pipeline reshapes around it:
+A YouTube project picks one, and the pipeline reshapes around it — the steps that
+belong to the other four disappear:
 
 | Engine | What it needs | What you get |
 |---|---|---|
 | **Designed slides** (default) | nothing but ffmpeg | typographic slides in your channel palette, a slow Ken Burns move, captions cut to the narration |
 | **Stock footage** | a free Pexels or Pixabay key | the script's visual briefs turned into search terms, free clips downloaded and cut to each narration block |
+| **AI video** | an OpenRouter key — the same one the text roles use | original footage generated from each scene's visual brief by Veo, Sora, Kling, Seedance, Wan, Hailuo or whatever else OpenRouter serves that day, laid under your own narration |
 | **MoneyPrinterTurbo** | your own instance running (`python main.py` in its folder, API on port 8080 — *not* `webui.bat`, which is a separate Streamlit app on 8501) | the whole job handed to it, the finished file collected |
+| **A video I already have** | a file, or a folder to take the newest video from | no render at all: the file is copied into the project untouched and goes straight to metadata, thumbnails and upload |
 
-All three produce **long-form 16:9 and vertical 9:16**. The Shorts step will
-either crop the long video or, on the stock and MoneyPrinterTurbo engines,
+All of them produce **long-form 16:9 and vertical 9:16**. The Shorts step will
+either crop the long video or, on the stock, AI and MoneyPrinterTurbo engines,
 render a genuinely fresh vertical cut rather than a letterboxed crop.
+
+**AI video is the only engine here that costs real money per video.** Video models
+bill by the second, so the step buys a pool of short clips and the renderer reuses
+them across the scenes rather than generating one per scene; you set how many, and
+clips already on disk are never bought twice. Start at 720p with two or three clips
+and look at the result before scaling it up. Settings › Publishing › AI video lists
+what OpenRouter currently serves and what each model charges — the catalogue
+changes often enough that a model name from last month is not worth trusting.
+
+The **own-file** engine is for the case where you cut the video somewhere else and
+only want the publishing half: it still writes the metadata, renders the thumbnails
+and uploads, and it never touches or re-encodes your original.
 
 The stock engine is a native implementation of the approach
 [MoneyPrinterTurbo](https://github.com/harry0703/MoneyPrinterTurbo) popularised
@@ -168,10 +183,28 @@ Some things no software can automate, and the suite says so rather than pretendi
   suite writes the command; metadata and screenshots go by API.
 - **YouTube avatar and banner images** cannot be set by API — Google removed that.
   The About text, keywords and country can.
+- **A YouTube token is tied to one channel.** The API has no per-upload channel
+  switch: the channel is chosen in the browser, on the account picker, at sign-in.
+  So running several channels means signing in once per channel. Settings ›
+  Publishing › YouTube lists them all, one is starred as the default, and every
+  project picks between them in the *YouTube channel* box on its upload step.
 - **Etsy, Gumroad and Payhip** have no usable product-creation API for digital
   downloads. The suite builds the zip and writes every field; you upload it.
 - **Podcast hosting** is a file-serving problem, not an API one. The suite writes
   a valid feed; you put the MP3s somewhere public.
+
+## Privacy and analytics
+
+Your keys, drafts and projects stay on your machine; model and publishing calls
+go straight from you to the service concerned. The app also sends a small
+anonymous event on start, on creating a project, and when an automated step
+fails — app version, OS, architecture, language, and the pipeline or step id.
+Never your keys, project names, drafts, prompts, paths or location.
+
+Turn it off in **Settings › General › Analytics**, or with `DO_NOT_TRACK=1` or
+`DAS_TELEMETRY=0`. A build from source has no analytics key compiled in and sends
+nothing at all. It runs on a background thread and cannot block or break the app;
+offline, it drops events and gives up. Full detail: [PRIVACY.md](PRIVACY.md).
 
 ## Upgrading from AIpath Studio
 
@@ -223,7 +256,9 @@ flet pack run.py --name "Digital Assets Studio" --add-data "digital_assets_studi
    scripts, image prompts, code. Point the cheap roles at a cheap or local model and
    keep the strong one for drafting. That single screen is most of your running cost.
 3. **Settings › Publishing** — connect YouTube (OAuth), Google Play (service account
-   JSON) and App Store Connect (.p8 key). One-time each.
+   JSON) and App Store Connect (.p8 key). One-time each. Connect one YouTube
+   channel per channel you publish to; the starred one is what a project uses
+   until it picks another.
 4. **Home** — pick what you are shipping.
 
 The app opens in a light theme on a white background. Settings › General has a dark-mode

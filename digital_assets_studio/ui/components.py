@@ -167,7 +167,14 @@ def markdown(p: Palette, text: str) -> ft.Markdown:
     )
 
 
-def build_field(p: Palette, f: Field_, value: Any, on_change: Callable[[str, Any], None]) -> ft.Control:
+def build_field(p: Palette, f: Field_, value: Any, on_change: Callable[[str, Any], None],
+                browse: Callable[[Field_, Callable[[str], None]], None] | None = None) -> ft.Control:
+    """One control for one field.
+
+    `browse` opens the OS file dialog for file/folder fields. It is passed in
+    rather than imported because the picker belongs to the page, not to a widget,
+    and a form without one still has to draw - the box stays typeable.
+    """
     def handler(e):
         v = e.control.value
         if f.type == "number":
@@ -178,7 +185,27 @@ def build_field(p: Palette, f: Field_, value: Any, on_change: Callable[[str, Any
         on_change(f.key, v)
 
     if f.type == "select":
-        return dropdown(p, f.label, f.options, str(value or f.default or ""), handler)
+        return dropdown(p, f.label, f.choices(), str(value or f.default or ""), handler)
+    if f.type in ("file", "folder"):
+        box = text_field(
+            p, f.label, str(value or f.default or ""), hint=f.placeholder,
+            helper=f.help, on_change=handler)
+
+        def picked(path: str) -> None:
+            box.value = path
+            on_change(f.key, path)
+            try:
+                box.update()
+            except Exception:  # noqa: BLE001 - not mounted yet; the value still stuck
+                pass
+
+        return ft.Row([
+            ft.Container(content=box, expand=True),
+            ghost_button(p, "Browse", lambda e: browse(f, picked) if browse else None,
+                         ft.Icons.FOLDER_OPEN_ROUNDED if f.type == "folder"
+                         else ft.Icons.ATTACH_FILE_ROUNDED,
+                         disabled=browse is None),
+        ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.START)
     if f.type == "switch":
         return ft.Container(
             content=ft.Row([

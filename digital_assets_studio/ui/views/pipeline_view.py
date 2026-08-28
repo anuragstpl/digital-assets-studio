@@ -225,7 +225,8 @@ def _step_detail(studio, step_id: str) -> ft.Control:
             spacing=8, wrap=True, run_spacing=8))
 
     if step.fields:
-        controls = [build_field(p, f, project.answers.get(f.key, ""), studio.set_answer)
+        controls = [build_field(p, f, project.answers.get(f.key, ""), studio.set_answer,
+                                browse=studio.browse_for)
                     for f in step.fields]
         blocks.append(card(p, label(p, "Options"), *controls))
 

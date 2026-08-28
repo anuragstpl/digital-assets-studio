@@ -1,0 +1,366 @@
+From 7e24968b24162aba0397986ff84c5848e7649981 Mon Sep 17 00:00:00 2001
+From: AIpath <aidiginext@gmail.com>
+Date: Sun, 23 Aug 2026 05:12:03 +0000
+Subject: [PATCH] Fix a NameError in the stock search-terms step, and add a
+ check that catches it
+
+"Work out the search terms" failed with `name 'ROLE_IMAGE_PROMPT' is not defined`.
+The role constant was used but never imported, and no test executed that step, so
+46 passing checks said nothing about it.
+
+- import ROLE_IMAGE_PROMPT in the YouTube pipeline
+- tests/lint.py runs pyflakes over every file and fails on undefined names,
+  shadowed definitions and dead locals, whether the line ever executes or not
+- tests/integration.py now actually runs the stock search-terms step
+- tidied the findings the new check surfaced: two stray f-prefixes, one unused
+  result, and eight dead bindings in the tests themselves
+- CI runs the static check before either suite
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01T37FTB9TMFqCFGZVfezhr8
+---
+ .github/workflows/ci.yml                      |  5 +-
+ CONTRIBUTING.md                               | 10 ++-
+ digital_assets_studio/config.py               |  2 +-
+ .../pipelines/books/pipeline.py               |  4 +-
+ .../pipelines/youtube/pipeline.py             |  5 +-
+ pyproject.toml                                |  2 +-
+ requirements.txt                              |  3 +
+ tests/integration.py                          | 41 ++++++++--
+ tests/lint.py                                 | 79 +++++++++++++++++++
+ 9 files changed, 135 insertions(+), 16 deletions(-)
+ create mode 100644 tests/lint.py
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 2b04adf..fdbccd7 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -39,11 +39,14 @@ jobs:
+       - name: Install dependencies
+         run: |
+           python -m pip install --upgrade pip
+-          pip install -r requirements.txt
++          pip install -r requirements.txt pyflakes
+ 
+       - name: Environment report
+         run: python doctor.py
+ 
++      - name: Static checks
++        run: python tests/lint.py
++
+       - name: Offline suite
+         env:
+           DAS_STRICT_RENDER: "1"
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+index a4ff898..b7c2f64 100644
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -22,11 +22,19 @@ API and the UI does not run on it.
+ ## Running the tests
+ 
+ ```bash
++python tests/lint.py          # undefined names and dead code, across every file
+ python tests/smoke.py         # every screen, every pipeline, offline with a stub model
+ python tests/integration.py   # every publishing connector against mock API servers
+ ```
+ 
+-Neither needs credentials or network access. Both must pass before a pull request.
++None of them needs credentials or network access. All three must pass before a
++pull request. `tests/lint.py` needs `pip install pyflakes`; it skips with a note
++if that is absent locally, and CI enforces it either way.
++
++That third suite exists because of a specific failure: an automated step that no
++test happened to execute carried a missing import, every suite passed, and it only
++broke when a user pressed the button. pyflakes reads every line whether it runs or
++not.
+ 
+ `tests/smoke.py` builds every screen with a stub page and runs each pipeline against
+ a fake model, so a broken control or a broken step fails here rather than on a user's
+diff --git a/digital_assets_studio/config.py b/digital_assets_studio/config.py
+index a250064..3e38a0a 100644
+--- a/digital_assets_studio/config.py
++++ b/digital_assets_studio/config.py
+@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
+ 
+ APP_NAME = "Digital Assets Studio"
+ APP_ID = "digital-assets-studio"
+-APP_VERSION = "0.5.0"
++APP_VERSION = "0.5.1"
+ TAGLINE = "One suite. Every digital asset."
+ 
+ # --------------------------------------------------------------------------
+diff --git a/digital_assets_studio/pipelines/books/pipeline.py b/digital_assets_studio/pipelines/books/pipeline.py
+index 453e2a0..777f3b0 100644
+--- a/digital_assets_studio/pipelines/books/pipeline.py
++++ b/digital_assets_studio/pipelines/books/pipeline.py
+@@ -66,7 +66,7 @@ def _step_market(p: Project, ctx: JobContext) -> StepResult:
+     md = [f"# Market check — {m.get('demand_verdict','?').upper()}", "", m.get("reasoning", ""), "",
+           "## What the incumbents already do", "", m.get("competition", ""), "",
+           "## The gap", "", m.get("gap") or "_No clear gap found. That is a reason to change the angle._", "",
+-          f"## Price band", "", m.get("price_band", ""), "",
++          "## Price band", "", m.get("price_band", ""), "",
+           "## Alternative titles", ""] + [f"- {t}" for t in m.get("title_alternates", [])]
+     md += ["", "## Search phrases buyers actually type", ""] + [f"- {k}" for k in m.get("keywords_seed", [])]
+     md += ["", "## Warnings", ""] + [f"- {w}" for w in m.get("warnings", [])]
+@@ -426,7 +426,7 @@ def _step_pack(p: Project, ctx: JobContext) -> StepResult:
+         "generated": datetime.now().isoformat(timespec="seconds"),
+         "ai_assisted": True,
+     }
+-    out = build_pack(p.dir, p.build / "store_pack.zip", files, manifest)
++    build_pack(p.dir, p.build / "store_pack.zip", files, manifest)
+     included = sum(1 for f in files if f.exists())
+     return StepResult(f"store_pack.zip built with {included} files", ["build/store_pack.zip"])
+ 
+diff --git a/digital_assets_studio/pipelines/youtube/pipeline.py b/digital_assets_studio/pipelines/youtube/pipeline.py
+index 2a244dd..a95bf02 100644
+--- a/digital_assets_studio/pipelines/youtube/pipeline.py
++++ b/digital_assets_studio/pipelines/youtube/pipeline.py
+@@ -4,7 +4,8 @@ from __future__ import annotations
+ import json
+ from pathlib import Path
+ 
+-from ...config import (ASSETS_DIR, ROLE_MARKETING, ROLE_METADATA, ROLE_PLANNING, ROLE_RESEARCH,
++from ...config import (ASSETS_DIR, ROLE_IMAGE_PROMPT, ROLE_MARKETING, ROLE_METADATA,
++                       ROLE_PLANNING, ROLE_RESEARCH,
+                        ROLE_SCRIPT)
+ from ...core.jobs import JobContext
+ from ...core.llm import router
+@@ -51,7 +52,7 @@ Return JSON:
+ """
+     data = router.text_json(ROLE_PLANNING, prompt, VOICE_NOTE, max_tokens=3000)
+     p.write_text("drafts/positioning.json", json.dumps(data, indent=2))
+-    md = [f"# Positioning", "", f"**Promise** — {data.get('promise','')}", "",
++    md = ["# Positioning", "", f"**Promise** — {data.get('promise','')}", "",
+           f"**The unit** — {data.get('unit','')}", "",
+           f"**Tagline** — {data.get('tagline','')}", "",
+           f"**Differentiator** — {data.get('differentiator','')}", "",
+diff --git a/pyproject.toml b/pyproject.toml
+index bb03532..02c0f3f 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
+ 
+ [project]
+ name = "digital-assets-studio"
+-version = "0.5.0"
++version = "0.5.1"
+ description = "One desktop suite for producing and publishing digital assets: books, printables, audiobooks, YouTube, podcasts, courses and mobile apps."
+ readme = "README.md"
+ requires-python = ">=3.10,<3.13"
+diff --git a/requirements.txt b/requirements.txt
+index 87fc7b2..acd2c53 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -7,6 +7,9 @@ reportlab>=4.1
+ markdown>=3.6
+ PyJWT[crypto]>=2.8
+ 
++# Development only
++pyflakes>=3.2          # tests/lint.py
++
+ # Optional. Each unlocks one feature; the app runs without them and says which
+ # are missing in Settings > Publishing.
+ edge-tts>=6.1          # free voiceovers for video, audiobooks and podcasts
+diff --git a/tests/integration.py b/tests/integration.py
+index cf04b48..7fed342 100644
+--- a/tests/integration.py
++++ b/tests/integration.py
+@@ -273,7 +273,7 @@ def test_play_guards_and_errors():
+         api.json_route("POST", rf"/androidpublisher/v3/applications/{pkg}/edits", {"id": "E2"})
+         api.json_route("DELETE", rf"/androidpublisher/v3/applications/{pkg}/edits/E2", {})
+         try:
+-            with play.Edit(pkg) as e:
++            with play.Edit(pkg):
+                 raise RuntimeError("something went wrong mid-edit")
+         except RuntimeError:
+             pass
+@@ -587,7 +587,7 @@ def test_youtube_publish_step():
+     from digital_assets_studio.pipelines.youtube import pipeline as ytp
+ 
+     with MockAPI() as api:
+-        yt = _youtube_api(api)
++        _youtube_api(api)
+         api.json_route("GET", "/youtube/v3/channels", CHANNEL)
+         api.json_route("POST", "/upload/youtube/v3/videos",
+                        lambda req, m: (_ for _ in ()).throw(AssertionError("should be resumable")))
+@@ -647,7 +647,7 @@ def test_play_publish_step():
+     from digital_assets_studio.pipelines import get as get_pipeline
+ 
+     with MockAPI() as api:
+-        play = _play(api)
++        _play(api)
+         pkg = "com.test.app"
+         api.json_route("POST", rf"/androidpublisher/v3/applications/{pkg}/edits", {"id": "E9"})
+         api.json_route("PUT", rf"/androidpublisher/v3/applications/{pkg}/edits/E9/listings/en-US", {})
+@@ -718,7 +718,7 @@ def test_podcast_produce_and_feed():
+     assert proj.exists("build/ep001.mp3"), "no episode audio produced"
+     assert "RMS" in produced.message, produced.message
+ 
+-    feed = pipe.execute(pl, proj, pl.step("feed"), JobContext("t", "t"))
++    pipe.execute(pl, proj, pl.step("feed"), JobContext("t", "t"))
+     xml = proj.read_text("build/feed.xml")
+     doc = minidom.parseString(xml)
+     item = doc.getElementsByTagName("item")[0]
+@@ -764,7 +764,7 @@ def test_course_video_step():
+     from digital_assets_studio.core.jobs import JobContext
+     from digital_assets_studio.pipelines import get as get_pipeline
+ 
+-    tts = _fake_tts()
++    _fake_tts()
+     proj = _project("course", {
+         "subject": "s", "student": "st", "outcome": "o", "length": "Short (under 1 hour)",
+         "price": "$49-99", "theme": "Light"}, "Course publish")
+@@ -808,7 +808,7 @@ def test_appstore_push_step():
+     from digital_assets_studio.pipelines import get as get_pipeline
+ 
+     with MockAPI() as api:
+-        appstore = _appstore(api)
++        _appstore(api)
+         api.json_route("GET", r"/v1/apps", {"data": [
+             {"id": "APP7", "attributes": {"name": "T", "bundleId": "com.test.app", "sku": "S"}}]})
+         api.json_route("GET", r"/v1/apps/APP7/appStoreVersions", {"data": []})
+@@ -846,7 +846,7 @@ def test_youtube_short_cut_step():
+     from digital_assets_studio.pipelines import get as get_pipeline
+ 
+     with MockAPI() as api:
+-        yt = _youtube_api(api)
++        _youtube_api(api)
+ 
+         @api.route("POST", r"/upload/youtube/v3/videos")
+         def start(req, m):
+@@ -903,6 +903,30 @@ def _youtube_project_for_render(engine: str, name: str):
+     return proj
+ 
+ 
++def test_stock_terms_step_actually_runs():
++    """The step that broke. It had no test that executed it, so a missing import
++    sat there until a user pressed the button."""
++    from digital_assets_studio.core import pipeline as pipe
++    from digital_assets_studio.core.jobs import JobContext
++    from digital_assets_studio.core.llm import router
++    from digital_assets_studio.pipelines import get as get_pipeline
++
++    real = router.text_json
++    router.text_json = lambda role, user, system="", **kw: {
++        "terms": [["market stall", "shopfront"], ["hands typing", "laptop desk"]]}
++    try:
++        proj = _youtube_project_for_render("Stock footage (Pexels / Pixabay)", "Stock terms")
++        pl = get_pipeline("youtube")
++        pipe.mark_manual_done(proj, pl.step("script"))
++        result = pipe.execute(pl, proj, pl.step("stock_terms"), JobContext("t", "t"))
++        saved = json.loads(proj.read_text("drafts/episodes/ep-r.stock_terms.json"))
++        assert saved["all"] == ["market stall", "shopfront", "hands typing", "laptop desk"], saved
++        assert len(saved["per_scene"]) == 2
++        assert "4 search terms" in result.message, result.message
++    finally:
++        router.text_json = real
++
++
+ def test_render_with_stock_engine():
+     """The stock engine end to end: search terms, downloaded clips, real ffmpeg."""
+     from digital_assets_studio.core import pipeline as pipe
+@@ -912,7 +936,7 @@ def test_render_with_stock_engine():
+ 
+     tts = _fake_tts()
+     with MockAPI() as api:
+-        sv = _stock(api)
++        _stock(api)
+         import subprocess
+         clip = Path(WORK) / "stockclip.mp4"
+         subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i",
+@@ -1033,6 +1057,7 @@ if __name__ == "__main__":
+     check("pipeline: podcast audio and RSS feed", test_podcast_produce_and_feed)
+     check("pipeline: audiobook mastering and M4B", test_audiobook_master_and_package)
+     check("pipeline: course lesson video", test_course_video_step)
++    check("pipeline: stock search terms step", test_stock_terms_step_actually_runs)
+     check("pipeline: stock-footage render end to end", test_render_with_stock_engine)
+     check("pipeline: MoneyPrinterTurbo render", test_render_with_moneyprinterturbo)
+     check("pipeline: appstore metadata push", test_appstore_push_step)
+diff --git a/tests/lint.py b/tests/lint.py
+new file mode 100644
+index 0000000..081ad64
+--- /dev/null
++++ b/tests/lint.py
+@@ -0,0 +1,79 @@
++"""Static checks that catch what the other suites cannot.
++
++An automated step that no test happens to execute can sit in the codebase with a
++NameError in it and every test will still pass — which is exactly how a missing
++import shipped and only failed when a user pressed the button. pyflakes reads
++every line whether it runs or not, so this closes that gap.
++
++    python tests/lint.py
++"""
++from __future__ import annotations
++
++import sys
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++
++# Findings that mean something is genuinely broken or a real hazard.
++# Unused imports are noise and are deliberately not fatal.
++FATAL = (
++    "undefined name",
++    "local variable",              # referenced before assignment, or dead
++    "redefinition of unused",      # a duplicated def silently replacing another
++    "f-string is missing placeholders",
++    "syntax error",
++    "invalid syntax",
++    "'return' outside function",
++    "two starred expressions",
++    "assertion is always true",    # assert (a, b) - always truthy, never checks
++)
++
++TARGETS = ["digital_assets_studio", "tests"]
++
++
++def main() -> int:
++    try:
++        from pyflakes.api import checkPath
++        from pyflakes.reporter import Reporter
++    except ImportError:
++        print("pyflakes is not installed - install it with:  pip install pyflakes")
++        print("(skipping; CI installs it, so this will still be enforced there)")
++        return 0
++
++    import io
++
++    out, err = io.StringIO(), io.StringIO()
++    reporter = Reporter(out, err)
++    files = sorted(
++        f for target in TARGETS
++        for f in (ROOT / target).rglob("*.py")
++        if "__pycache__" not in f.parts
++    )
++    for f in files:
++        checkPath(str(f), reporter)
++
++    findings = [line for line in (out.getvalue() + err.getvalue()).splitlines() if line.strip()]
++    fatal = [f for f in findings
++             if any(marker in f.lower() for marker in FATAL)]
++    other = [f for f in findings if f not in fatal]
++
++    print(f"checked {len(files)} files")
++    if other:
++        print(f"\n{len(other)} tidiness note(s), not failures:")
++        for line in other[:5]:
++            print("   ", line.replace(str(ROOT) + "/", ""))
++        if len(other) > 5:
++            print(f"    … and {len(other) - 5} more")
++
++    if fatal:
++        print(f"\n{len(fatal)} FAILURE(S):")
++        for line in fatal:
++            print("  -", line.replace(str(ROOT) + "/", ""))
++        return 1
++
++    print("\nno undefined names, no shadowed definitions, no dead locals")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+-- 
+2.43.0
+

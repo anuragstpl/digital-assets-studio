@@ -26,6 +26,15 @@ LEGACY_SERVICE = "AIpathStudio"   # previous name; kept so existing keys still r
 _FALLBACK_FILE = WORKSPACE / "keys.fallback"
 
 
+# A test suite must never touch the real credential store. Reading it makes
+# tests pass or fail on whatever the developer happens to have configured, and
+# writing it destroys real keys - which is exactly what happened: an integration
+# run overwrote a live Pexels key with its fixture. DAS_KEYVAULT=memory keeps
+# every secret inside this process and never reaches the OS keychain or disk.
+_MEMORY_ONLY = os.environ.get("DAS_KEYVAULT", "").strip().lower() == "memory"
+_memory: dict[str, str] = {}
+
+
 def _load_keyring():
     try:
         import keyring
@@ -41,7 +50,7 @@ def _load_keyring():
         return None, "unavailable"
 
 
-_KEYRING, _BACKEND_NAME = _load_keyring()
+_KEYRING, _BACKEND_NAME = (None, "in-memory (test mode)") if _MEMORY_ONLY else _load_keyring()
 
 
 # ---------------------------------------------------------------- fallback ---
@@ -85,7 +94,7 @@ def backend_name() -> str:
 
 
 def is_secure() -> bool:
-    return _KEYRING is not None
+    return _KEYRING is not None and not _MEMORY_ONLY
 
 
 _warned = False
@@ -103,6 +112,9 @@ def set_secret(name: str, value: str) -> None:
     if not value:
         delete_secret(name)
         return
+    if _MEMORY_ONLY:
+        _memory[name] = value
+        return
     if _KEYRING is not None:
         try:
             _KEYRING.set_password(SERVICE, name, value)
@@ -115,6 +127,8 @@ def set_secret(name: str, value: str) -> None:
 
 
 def get_secret(name: str) -> str:
+    if _MEMORY_ONLY:
+        return _memory.get(name, "")
     if _KEYRING is not None:
         try:
             got = _KEYRING.get_password(SERVICE, name)
@@ -136,6 +150,9 @@ def get_secret(name: str) -> str:
 
 
 def delete_secret(name: str) -> None:
+    if _MEMORY_ONLY:
+        _memory.pop(name, None)
+        return
     if _KEYRING is not None:
         try:
             _KEYRING.delete_password(SERVICE, name)

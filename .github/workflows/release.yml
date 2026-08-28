@@ -23,6 +23,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      # The Aptabase key is a write-only ingest key, but it still does not
+      # belong in git. Add it as a repository secret named APTABASE_APP_KEY;
+      # with no secret set this is a no-op and the build ships analytics off.
+      - name: Bake in the analytics key
+        if: env.APTABASE_APP_KEY != ''
+        env:
+          APTABASE_APP_KEY: ${{ secrets.APTABASE_APP_KEY }}
+        shell: bash
+        run: |
+          python - <<'EOF'
+          import os, pathlib, re
+          p = pathlib.Path("digital_assets_studio/config.py")
+          key = os.environ["APTABASE_APP_KEY"]
+          s = p.read_text(encoding="utf-8")
+          s = re.sub(r'^APTABASE_APP_KEY = ""$', f'APTABASE_APP_KEY = "{key}"',
+                     s, count=1, flags=re.M)
+          p.write_text(s, encoding="utf-8")
+          print("analytics key baked in")
+          EOF
+
       - name: Build the app
         run: pyinstaller packaging/das.spec --noconfirm
 
@@ -67,6 +87,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
+
+      - name: Bake in the analytics key
+        if: env.APTABASE_APP_KEY != ''
+        env:
+          APTABASE_APP_KEY: ${{ secrets.APTABASE_APP_KEY }}
+        run: |
+          python - <<'EOF'
+          import os, pathlib, re
+          p = pathlib.Path("digital_assets_studio/config.py")
+          s = p.read_text(encoding="utf-8")
+          s = re.sub(r'^APTABASE_APP_KEY = ""$',
+                     f'APTABASE_APP_KEY = "{os.environ["APTABASE_APP_KEY"]}"',
+                     s, count=1, flags=re.M)
+          p.write_text(s, encoding="utf-8")
+          EOF
 
       - name: Build the app and DMG
         run: bash packaging/build_macos.sh

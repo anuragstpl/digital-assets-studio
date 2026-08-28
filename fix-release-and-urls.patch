@@ -1,0 +1,183 @@
+From d0ed67d7c4da1aef0c8d498f6c4b5aef38b23215 Mon Sep 17 00:00:00 2001
+From: AIpath <aidiginext@gmail.com>
+Date: Sun, 23 Aug 2026 04:53:34 +0000
+Subject: [PATCH] Fix the release build, and point every link at anuragstpl
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The release workflow could never publish. Its Intel macOS job ran on macos-13,
+which GitHub retired on 4 December 2025, so that leg failed immediately — and
+because `publish` needed every platform, one dead runner image left the release
+page empty even though the Windows build was fine.
+
+- macos-13 -> macos-15-intel, macos-14 -> macos-15
+- publish now runs if any platform succeeded, so a single broken runner ships
+  the rest instead of blocking everything
+- the publish job lists what it collected, so a partial release is obvious
+- README, CONTRIBUTING, SECURITY, pyproject and the installer now point at
+  github.com/anuragstpl/digital-assets-studio
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01T37FTB9TMFqCFGZVfezhr8
+---
+ .github/workflows/release.yml | 16 ++++++++++++----
+ CONTRIBUTING.md               |  2 +-
+ README.md                     |  8 ++++----
+ SECURITY.md                   |  2 +-
+ packaging/installer.iss       |  2 +-
+ packaging/set_repo.py         |  4 ++--
+ pyproject.toml                |  6 +++---
+ 7 files changed, 24 insertions(+), 16 deletions(-)
+
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index 6e9bdd4..57d6c2c 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -57,9 +57,10 @@ jobs:
+       matrix:
+         # arm64 for Apple silicon, x86_64 for Intel Macs
+         include:
+-          - runner: macos-14
++          - runner: macos-15
+             arch: arm64
+-          - runner: macos-13
++          # macos-13 was retired on 4 December 2025; macos-15-intel replaced it
++          - runner: macos-15-intel
+             arch: x86_64
+     runs-on: ${{ matrix.runner }}
+     steps:
+@@ -78,10 +79,17 @@ jobs:
+   publish:
+     needs: [windows, macos]
+     runs-on: ubuntu-latest
+-    if: startsWith(github.ref, 'refs/tags/')
++    # `always()` so a failure on one platform still ships the others, rather than
++    # leaving the release page empty because a single runner image went away
++    if: always() && startsWith(github.ref, 'refs/tags/') && contains(needs.*.result, 'success')
+     steps:
+       - uses: actions/download-artifact@v4
+-        with: {path: artifacts}
++        with:
++          path: artifacts
++          merge-multiple: false
++
++      - name: What was built
++        run: find artifacts -type f | sort
+ 
+       - name: Publish the release
+         uses: softprops/action-gh-release@v2
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+index 1c5447e..a4ff898 100644
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -7,7 +7,7 @@ honest about what it cannot do?
+ ## Getting set up
+ 
+ ```bash
+-git clone https://github.com/aidiginext/digital-assets-studio.git
++git clone https://github.com/anuragstpl/digital-assets-studio.git
+ cd digital-assets-studio
+ python -m venv .venv
+ source .venv/bin/activate        # Windows: .venv\Scripts\activate
+diff --git a/README.md b/README.md
+index bf5e116..fa85afd 100644
+--- a/README.md
++++ b/README.md
+@@ -10,8 +10,8 @@ Take a digital product from idea to published — books, printables, audiobooks,
+ YouTube videos, podcasts, courses and mobile apps — automating every step the
+ platform allows, and stopping only where a person is genuinely required.
+ 
+-[![tests](https://github.com/aidiginext/digital-assets-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/aidiginext/digital-assets-studio/actions/workflows/ci.yml)
+-[![release](https://img.shields.io/github/v/release/aidiginext/digital-assets-studio?sort=semver)](https://github.com/aidiginext/digital-assets-studio/releases/latest)
++[![tests](https://github.com/anuragstpl/digital-assets-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/anuragstpl/digital-assets-studio/actions/workflows/ci.yml)
++[![release](https://img.shields.io/github/v/release/anuragstpl/digital-assets-studio?sort=semver)](https://github.com/anuragstpl/digital-assets-studio/releases/latest)
+ [![licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
+ [![python](https://img.shields.io/badge/python-3.10--3.12-blue)](https://www.python.org/)
+ 
+@@ -22,7 +22,7 @@ platform allows, and stopping only where a person is genuinely required.
+ ## Install
+ 
+ **Windows** — download the installer from
+-[Releases](https://github.com/aidiginext/digital-assets-studio/releases/latest) and run it.
++[Releases](https://github.com/anuragstpl/digital-assets-studio/releases/latest) and run it.
+ SmartScreen will say the publisher is unknown, because the build is not
+ code-signed: **More info → Run anyway**. A portable zip is there too if you would
+ rather not install anything.
+@@ -34,7 +34,7 @@ notarised, so the first launch needs **right-click → Open → Open**.
+ **From source** — any platform, Python 3.10–3.12:
+ 
+ ```bash
+-git clone https://github.com/aidiginext/digital-assets-studio.git
++git clone https://github.com/anuragstpl/digital-assets-studio.git
+ cd digital-assets-studio
+ python -m pip install -r requirements.txt
+ python run.py
+diff --git a/SECURITY.md b/SECURITY.md
+index db89967..882e8f3 100644
+--- a/SECURITY.md
++++ b/SECURITY.md
+@@ -2,7 +2,7 @@
+ 
+ ## Reporting a vulnerability
+ 
+-Please open a [private security advisory](https://github.com/aidiginext/digital-assets-studio/security/advisories/new)
++Please open a [private security advisory](https://github.com/anuragstpl/digital-assets-studio/security/advisories/new)
+ rather than a public issue. You should get a first response within a week.
+ 
+ ## How this app handles your secrets
+diff --git a/packaging/installer.iss b/packaging/installer.iss
+index b9d83e1..23977cd 100644
+--- a/packaging/installer.iss
++++ b/packaging/installer.iss
+@@ -6,7 +6,7 @@
+ 
+ #define AppName "Digital Assets Studio"
+ #define AppPublisher "AIpath"
+-#define AppURL "https://github.com/aidiginext/digital-assets-studio"
++#define AppURL "https://github.com/anuragstpl/digital-assets-studio"
+ #define AppExeName "DigitalAssetsStudio.exe"
+ 
+ [Setup]
+diff --git a/packaging/set_repo.py b/packaging/set_repo.py
+index 9702f9b..0e5d85d 100644
+--- a/packaging/set_repo.py
++++ b/packaging/set_repo.py
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ """Point the repo at your own GitHub account.
+ 
+-If you forked this, or your username is not `aidiginext`, run:
++If you forked this, or your username is not `anuragstpl`, run:
+ 
+     python packaging/set_repo.py your-username [repo-name]
+ 
+@@ -12,7 +12,7 @@ from __future__ import annotations
+ import sys
+ from pathlib import Path
+ 
+-OLD_OWNER, OLD_REPO = "aidiginext", "digital-assets-studio"
++OLD_OWNER, OLD_REPO = "anuragstpl", "digital-assets-studio"
+ FILES = ["README.md", "CONTRIBUTING.md", "SECURITY.md", "pyproject.toml",
+          "packaging/installer.iss", ".github/workflows/release.yml"]
+ 
+diff --git a/pyproject.toml b/pyproject.toml
+index c9c278e..bb03532 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -43,9 +43,9 @@ printables = ["pypdf>=4.2", "pdf2image>=1.17"]
+ all = ["edge-tts>=6.1", "playwright>=1.44", "pypdf>=4.2", "pdf2image>=1.17"]
+ 
+ [project.urls]
+-Homepage = "https://github.com/aidiginext/digital-assets-studio"
+-Issues = "https://github.com/aidiginext/digital-assets-studio/issues"
+-Changelog = "https://github.com/aidiginext/digital-assets-studio/blob/main/CHANGELOG.md"
++Homepage = "https://github.com/anuragstpl/digital-assets-studio"
++Issues = "https://github.com/anuragstpl/digital-assets-studio/issues"
++Changelog = "https://github.com/anuragstpl/digital-assets-studio/blob/main/CHANGELOG.md"
+ 
+ [project.scripts]
+ digital-assets-studio = "digital_assets_studio.app:run"
+-- 
+2.43.0
+

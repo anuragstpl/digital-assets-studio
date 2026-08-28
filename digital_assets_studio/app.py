@@ -7,6 +7,7 @@ import sys
 import flet as ft
 
 from .config import APP_NAME, ASSETS_DIR, LOG_FILE, ensure_dirs
+from .core import telemetry
 from .core.jobs import RUNNER
 from .ui.studio import Studio
 
@@ -42,11 +43,14 @@ def main(page: ft.Page) -> None:
     def on_close(e) -> None:
         if e.data == "close":
             RUNNER.shutdown()
+            telemetry.shutdown()
             page.window.destroy()
 
     page.window.prevent_close = False
     page.on_window_event = on_close
     studio.mount()
+    # after mount, so nothing about analytics can delay the first paint
+    telemetry.track("app_started")
 
 
 def run() -> None:
