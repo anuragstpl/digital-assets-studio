@@ -27,9 +27,12 @@ SmartScreen will say the publisher is unknown, because the build is not
 code-signed: **More info → Run anyway**. A portable zip is there too if you would
 rather not install anything.
 
-**macOS** — download the `.dmg` for your chip (`arm64` for Apple silicon,
-`x86_64` for Intel) and drag the app to Applications. It is ad-hoc signed but not
-notarised, so the first launch needs **right-click → Open → Open**.
+**macOS** — **there is no macOS build in 0.8.0.** The DMG job fails on both Apple
+silicon and Intel runners and no `.dmg` is published, so run it from source
+instead (below); it works, it is just three commands rather than a download. A
+DMG will come back when that build is fixed — follow
+[the issues page](https://github.com/anuragstpl/digital-assets-studio/issues) if
+you want to know when.
 
 **From source** — any platform, Python 3.10–3.12:
 

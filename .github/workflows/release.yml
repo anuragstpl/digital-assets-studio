@@ -159,10 +159,12 @@ jobs:
             is not code-signed: click **More info → Run anyway**. Prefer no
             installer? Take the portable zip instead.
 
-            **macOS** — download the `.dmg` for your chip (`arm64` for Apple
-            silicon, `x86_64` for Intel) and drag the app to Applications. The
-            build is ad-hoc signed but not notarised, so the first launch needs
-            **right-click → Open → Open**. After that it opens normally.
+            **macOS** — if a `.dmg` is attached above, download the one for your
+            chip (`arm64` for Apple silicon, `x86_64` for Intel) and drag the app
+            to Applications; it is ad-hoc signed but not notarised, so the first
+            launch needs **right-click → Open → Open**. If no `.dmg` is listed,
+            that build did not succeed for this release — run it from source
+            instead, which takes three commands and works the same.
 
             **From source** — `pip install -r requirements.txt && python run.py`
 
