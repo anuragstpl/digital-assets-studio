@@ -66,6 +66,10 @@ def caption_filter(text: str, w: int, h: int, font: Path | None, tmpdir: Path,
 
     The text goes through a file rather than the filter string: it removes every
     escaping problem with quotes, colons and commas in real narration.
+
+    ``expansion=none`` matters just as much: without it drawtext reads the
+    narration as a template, and one per-cent sign - "margins rose 30%" - drops
+    the entire caption from the frame silently.
     """
     text = " ".join((text or "").split())
     if not text or font is None or not Path(font).exists():
@@ -83,7 +87,7 @@ def caption_filter(text: str, w: int, h: int, font: Path | None, tmpdir: Path,
     return (f"drawbox=y=ih-{box_h + int(h * 0.045)}:color=black@0.55:width=iw:"
             f"height={box_h}:t=fill,"
             f"drawtext=fontfile='{ffpath(font)}':textfile='{ffpath(caption_file)}'"
-            f":fontcolor=white:fontsize={size}:line_spacing=8"
+            f":fontcolor=white:fontsize={size}:line_spacing=8:expansion=none"
             f":x=(w-text_w)/2:y=h-{box_h + int(h * 0.045)}+{int(size * 0.45)}:box=0")
 
 

@@ -251,6 +251,9 @@ def _step_detail(studio, step_id: str) -> ft.Control:
             p, "Mark done" if st.status != DONE else "Done",
             lambda e: studio.mark_done(step.id), ft.Icons.CHECK_ROUNDED,
             disabled=bool(blocked) or st.status == DONE))
+    if step.opens == "editor":
+        actions.append(ghost_button(p, "Open the editor", lambda e: studio.open_editor(),
+                                    ft.Icons.VIDEO_SETTINGS_ROUNDED))
     if st.status in (DONE, FAILED, SKIPPED):
         actions.append(ghost_button(p, "Reset", lambda e: studio.reset_step(step.id),
                                     ft.Icons.RESTART_ALT_ROUNDED))

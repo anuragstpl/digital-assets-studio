@@ -470,6 +470,23 @@ def test_public_api_surface():
             ["generate", "ping", "configured", "base_url", "save_base_url", "build_params"],
         "digital_assets_studio.core.publishing.browser":
             ["available", "kdp_prefill", "Session", "INSTALL_HINT"],
+        "digital_assets_studio.core.editor.timeline":
+            ["Timeline", "Clip", "Text", "Audio", "load", "kind_for", "clamp",
+             "CUT", "FADE", "DISSOLVE", "SLIDE", "TRANSITIONS", "VIDEO", "IMAGE", "COLOUR",
+             "VOICE", "MUSIC", "POSITIONS", "LANDSCAPE", "PORTRAIT"],
+        "digital_assets_studio.core.editor.render":
+            ["render", "plan", "available", "preview_frame", "frame", "segment_job",
+             "join_job", "finish_job", "text_filters", "caption_filter", "voice_tracks",
+             "audio_map", "atempo_chain", "ffpath", "ffcolour", "Job", "RenderError"],
+        "digital_assets_studio.core.editor.analyze":
+            ["probe", "duration", "silences", "scene_cuts", "keep_spans", "parse_silences",
+             "parse_scene_cuts", "available", "Media"],
+        "digital_assets_studio.core.editor.ai":
+            ["assemble", "sources", "describe", "apply_ops", "plan_edit", "auto_edit",
+             "suggest_titles", "cut_dead_air", "silence_cuts", "crop", "highlight_start",
+             "OPS_HELP", "EditorError"],
+        "digital_assets_studio.core.editor.publish":
+            ["publish", "default_metadata", "PublishError"],
     }
     missing = []
     for module_name, names in expected.items():
@@ -795,9 +812,10 @@ def test_video_engines():
     """Each engine must activate its own steps and leave the others out, and the
     render step must never be blocked by a branch this project is not using."""
     from digital_assets_studio.core import pipeline as pipe
-    from digital_assets_studio.pipelines.youtube.pipeline import (ENGINE_AI, ENGINE_LOCAL,
-                                                                  ENGINE_MPT, ENGINE_SLIDES,
-                                                                  ENGINE_STOCK, ENGINES)
+    from digital_assets_studio.pipelines.youtube.pipeline import (ENGINE_AI, ENGINE_EDIT,
+                                                                  ENGINE_LOCAL, ENGINE_MPT,
+                                                                  ENGINE_SLIDES, ENGINE_STOCK,
+                                                                  ENGINES)
 
     pl = get_pipeline("youtube")
     base = {"topic": "t", "audience": "a", "language": "English", "format": "Shorts only",
@@ -812,7 +830,10 @@ def test_video_engines():
         ENGINE_MPT: (set(),
                      {"scene_art", "stock_terms", "stock_footage", "voiceover", "ai_clips"}),
         ENGINE_LOCAL: (set(),
-                       {"scene_art", "stock_terms", "stock_footage", "voiceover", "ai_clips"}),
+                       {"scene_art", "stock_terms", "stock_footage", "voiceover", "ai_clips",
+                        "edit"}),
+        ENGINE_EDIT: ({"scene_art", "voiceover", "edit"},
+                      {"stock_terms", "stock_footage", "ai_clips"}),
     }
     assert set(expected) == set(ENGINES), "an engine was added without a branching test"
     for engine, (present, absent) in expected.items():
@@ -822,11 +843,13 @@ def test_video_engines():
             assert want in ids, f"{engine}: {want} should apply"
         for gone in absent:
             assert gone not in ids, f"{engine}: {gone} should not apply"
+        if engine != ENGINE_EDIT:
+            assert "edit" not in ids, f"{engine}: the editor step belongs to the editor engine"
         blocked = set(pl.blocked(proj, pl.step("render")))
         assert blocked <= (present | {"fix_script"}), \
             f"{engine}: render blocked by a branch it does not use: {blocked}"
-    print("        slides / stock / AI / MoneyPrinterTurbo / own-file each activate "
-          "only their own steps")
+    print("        slides / stock / AI / MoneyPrinterTurbo / own-file / editor each "
+          "activate only their own steps")
 
 
 def test_caption_wrapping():
@@ -843,6 +866,8 @@ def test_caption_wrapping():
                      "off the edge of a portrait frame if nothing wrapped it.")
         f = caption_filter(long_text, 1080, 1920, font, P(tmp), 0)
         assert "textfile=" in f, "captions should go through a file, not the filter string"
+        assert "expansion=none" in f, \
+            "narration containing a per-cent sign would drop the whole caption"
         written = next(P(tmp).glob("caption_*.txt")).read_text(encoding="utf-8")
         lines = written.split("\n")
         assert len(lines) > 1, "long caption was not wrapped"
@@ -924,6 +949,381 @@ def test_rss_is_valid():
     assert doc.getElementsByTagName("enclosure")[0].getAttribute("length") == "100"
 
 
+
+def test_editor_timeline_arithmetic():
+    """The edit document. Every number the renderer trusts is computed here, so
+    a wrong start time is a wrong video and there is nothing downstream to catch
+    it."""
+    from digital_assets_studio.core.editor import timeline as etl
+
+    doc = etl.Timeline()
+    a = doc.add(etl.Clip(source="a.mp4", source_in=0, source_out=10, label="A"))
+    b = doc.add(etl.Clip(source="b.mp4", source_in=2, source_out=8, label="B"))
+    c = doc.add(etl.Clip(source="c.jpg", kind=etl.IMAGE, source_out=4, label="C"))
+    assert doc.starts() == [0.0, 10.0, 16.0], doc.starts()
+    assert doc.duration == 20.0, doc.duration
+
+    # a transition overlaps its neighbours, so it shortens the whole video
+    doc.set(b.id, transition=etl.DISSOLVE, transition_seconds=1.0)
+    assert doc.starts() == [0.0, 9.0, 15.0], doc.starts()
+    assert doc.duration == 19.0, doc.duration
+
+    # and it can never eat more than half of either neighbour
+    doc.set(c.id, transition=etl.FADE, transition_seconds=9.0)
+    assert doc.overlap(2) == 2.0, doc.overlap(2)
+
+    # a split keeps the total length: two windows onto one file
+    before = doc.duration
+    tail = doc.split(a.id, 4.0)
+    assert tail is not None and len(doc.clips) == 4
+    assert abs(doc.duration - before) < 1e-6, f"{doc.duration} != {before}"
+    assert (doc.clips[0].source_out, doc.clips[1].source_in) == (4.0, 4.0)
+    assert doc.clips[1].transition == etl.CUT, "a split half must not inherit a dissolve"
+    assert doc.split(a.id, 99.0) is None, "splitting outside the clip must refuse"
+
+    # speed changes how long a clip lasts, not what it points at
+    doc.set(tail.id, speed=2.0)
+    assert doc.clip(tail.id).length == 3.0, doc.clip(tail.id).length
+    doc.set(tail.id, speed=99)
+    assert doc.clip(tail.id).speed == etl.MAX_SPEED, "speed must be clamped"
+
+    # the playhead knows which clip it is over, and where in the file that is
+    assert doc.at(0.5) is doc.clips[0]
+    doc.set(tail.id, speed=1.0)
+    assert doc.source_seconds(tail.id, doc.starts()[1] + 1.0) == 5.0
+
+    # reordering never leaves the first clip fading in from nothing
+    doc.move(doc.clips[-1].id, 0)
+    assert doc.clips[0].transition == etl.CUT
+
+    # round-trips through JSON without losing a value
+    import tempfile
+    from pathlib import Path as P
+    with tempfile.TemporaryDirectory() as tmp:
+        path = doc.save(P(tmp) / "timeline.json")
+        again = etl.load(path)
+        assert again.to_dict() == doc.to_dict(), "the document did not round-trip"
+        assert etl.load(P(tmp) / "missing.json").clips == [], "a missing edit should be empty"
+        (P(tmp) / "broken.json").write_text("{not json", encoding="utf-8")
+        assert etl.load(P(tmp) / "broken.json").clips == [], "a corrupt edit must not raise"
+
+    # and it says what is wrong before ffmpeg has to
+    problems = doc.problems(P("/nowhere"))
+    assert any("no file at" in x for x in problems), problems
+    print(f"        {len(doc.clips)} clips, {doc.duration}s, overlaps and splits exact")
+
+
+def test_editor_operations_are_validated():
+    """A model can only ask for edits the document knows how to make, and every
+    refusal has to say why rather than corrupting the timeline."""
+    from digital_assets_studio.core.editor import ai as eai
+    from digital_assets_studio.core.editor import timeline as etl
+
+    doc = etl.Timeline()
+    doc.add(etl.Clip(source="a.mp4", source_in=0, source_out=10, label="A"))
+    doc.add(etl.Clip(source="b.mp4", source_in=0, source_out=10, label="B"))
+
+    applied, rejected = eai.apply_ops(doc, [
+        {"op": "trim", "clip": 0, "start": 1, "end": 5},
+        {"op": "transition", "clip": 1, "style": "dissolve", "seconds": 0.5},
+        {"op": "title", "text": "On screen", "start": 0.5, "seconds": 2},
+        {"op": "speed", "clip": "1", "factor": 1.5},
+        {"op": "fade_out", "seconds": 1.2},
+        {"op": "note", "text": "Tightened the open"},
+    ])
+    assert len(applied) == 6, (applied, rejected)
+    assert rejected == [], rejected
+    assert (doc.clips[0].source_in, doc.clips[0].source_out) == (1.0, 5.0)
+    assert doc.clips[1].transition == etl.DISSOLVE and doc.clips[1].speed == 1.5
+    assert len(doc.overlays) == 1 and doc.fade_out_seconds == 1.2
+    assert "Tightened" in doc.notes
+
+    kept = doc.to_dict()
+    applied, rejected = eai.apply_ops(doc, [
+        {"op": "remove", "clip": "does-not-exist"},
+        {"op": "transition", "clip": 0, "style": "explode"},
+        {"op": "transition", "clip": 0, "style": "fade"},
+        {"op": "music", "source": "nothing/here.mp3"},
+        {"op": "captions", "source": "nothing/here.srt"},
+        {"op": "teleport", "clip": 0},
+        "not an operation",
+        {"op": "title", "text": "   "},
+    ], base=Path(WORK))
+    assert applied == [], applied
+    assert len(rejected) == 8, rejected
+    assert any("does-not-exist" in r for r in rejected)
+    assert any("explode" in r for r in rejected)
+    assert doc.to_dict() == kept, "a rejected plan must leave the timeline untouched"
+
+    # the plan can arrive wrapped, or not be a list at all
+    assert eai.apply_ops(doc, {"operations": []}) == ([], [])
+    assert eai.apply_ops(doc, "nonsense")[1], "a non-list plan must be reported"
+    print(f"        6 applied, {len(rejected)} refused with reasons, document intact")
+
+
+def test_editor_render_plan():
+    """The ffmpeg commands, checked without running ffmpeg. Every bug this file
+    has ever had is visible in the argv."""
+    import tempfile
+    from pathlib import Path as P
+
+    from digital_assets_studio.core.editor import render as erender
+    from digital_assets_studio.core.editor import timeline as etl
+    from digital_assets_studio.config import ASSETS_DIR
+
+    doc = etl.Timeline(name="plan", width=1080, height=1920, fps=30)
+    doc.add(etl.Clip(source="a.mp4", source_in=1.5, source_out=5.5, volume=0.5, label="A"))
+    doc.add(etl.Clip(source="b.mp4", source_in=0, source_out=4, speed=2.0,
+                     transition=etl.DISSOLVE, transition_seconds=0.6, label="B"))
+    doc.add(etl.Clip(source="c.jpg", kind=etl.IMAGE, source_out=3, label="C"))
+    doc.add_text(etl.Text(text="Title here", start=1.0, seconds=2.0))
+    doc.set_music("music.mp3", gain_db=-20)
+    doc.fade_out_seconds = 1.0
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = P(tmp)
+        font = ASSETS_DIR / "fonts" / "Poppins-Medium.ttf"
+        jobs = erender.plan(doc, tmpdir / "out.mp4", P("/project"), tmpdir / "work",
+                            font=font, audio={str(P("/project") / "a.mp4"): True,
+                                              str(P("/project") / "b.mp4"): True})
+        assert len(jobs) == 5, [j.label for j in jobs]
+
+        first = " ".join(jobs[0].argv)
+        assert "-ss 1.500" in first and "-t 4.000" in first, first
+        assert "volume=0.500" in first, "the clip volume was not applied"
+        assert "anullsrc" in first, "every segment needs an audio stream to join on"
+
+        second = " ".join(jobs[1].argv)
+        assert "setpts=PTS/2.0000" in second, second
+        assert "atempo=2.000000" in second, "audio must be sped up with the picture"
+
+        third = " ".join(jobs[2].argv)
+        assert "-loop 1" in third and "zoompan" in third, "a still needs a hold and a push"
+        assert "[1:a]" in third, "a still has no sound of its own"
+
+        join = " ".join(jobs[3].argv)
+        # clip 1 dissolves, clip 2 cuts: the offset is where clip 1 starts
+        assert f"offset={doc.starts()[1]:.3f}" in join, join
+        assert "acrossfade=d=0.600" in join
+        assert "concat=n=2:v=1:a=1" in join, "a cut boundary must not be crossfaded"
+
+        finish = " ".join(jobs[4].argv)
+        assert "drawtext" in finish and "textfile=" in finish, "titles go through a file"
+        # drawtext reads its text as a template unless told not to, and one "%"
+        # in a title - "50% off" - then renders the whole line as nothing, with
+        # no error anywhere. Both burn-in paths have to switch expansion off.
+        assert "expansion=none" in finish, \
+            "a title with a per-cent sign in it would silently vanish"
+        assert "enable='between(t,1.000,3.000)'" in finish, finish
+        assert "volume=-20.0dB" in finish and "amix=inputs=2" in finish
+        assert "normalize=0" in finish, "amix would otherwise halve the narration"
+        assert f"fade=t=out:st={doc.duration - 1:.3f}" in finish
+
+        # a straight cut list is joined by copy - no re-encode, no quality lost
+        plain = etl.Timeline(width=640, height=360)
+        plain.add(etl.Clip(source="a.mp4", source_out=2))
+        plain.add(etl.Clip(source="b.mp4", source_out=2))
+        cuts = erender.plan(plain, tmpdir / "cut.mp4", P("/project"), tmpdir / "work2")
+        assert len(cuts) == 3, [j.label for j in cuts]
+        assert "-c copy" in " ".join(cuts[-1].argv), "cuts should be joined losslessly"
+        assert cuts[-1].argv[-1] == str(tmpdir / "cut.mp4"), "the last job writes the output"
+
+    assert erender.atempo_chain(4.0) == [2.0, 2.0], erender.atempo_chain(4.0)
+    assert erender.atempo_chain(0.25) == [0.5, 0.5], erender.atempo_chain(0.25)
+    assert erender.ffcolour("#FF8800") == "0xFF8800"
+    assert erender.ffpath(P("C:/Users/x/f.ttf")).startswith("C\\:"), "drive colon not escaped"
+    try:
+        erender.plan(etl.Timeline(), P("x.mp4"), P("."), P("."))
+        raise AssertionError("an empty timeline should refuse to render")
+    except erender.RenderError:
+        pass
+    print("        segments, crossfade offsets, drawtext, music mix and the copy join")
+
+
+def test_editor_assembles_a_project():
+    """The first cut, built from what a project has on disk - with no ffmpeg
+    involved, because the voiceover step already recorded the durations."""
+    from digital_assets_studio.core.editor import ai as eai
+    from digital_assets_studio.core.editor import timeline as etl
+
+    proj = pj.create("Editor assembly", "youtube", {
+        "topic": "t", "audience": "a", "language": "English",
+        "episode_slug": "ep-1", "orientation": "Portrait 9:16"})
+    proj.ensure_dirs()
+    for i in range(1, 4):
+        proj.write_bytes(f"build/voice/ep-1/scene_{i:03d}.mp3", b"m" * 100)
+        proj.write_bytes(f"build/scenes/ep-1/scene_{i:03d}.jpg", b"j" * 100)
+    proj.write_text("build/voice/ep-1.timings.json", json.dumps(
+        [{"seconds": 3.0, "file": "scene_001.mp3"}, {"seconds": 5.0, "file": "scene_002.mp3"},
+         {"seconds": 2.0, "file": "scene_003.mp3"}]))
+    proj.write_text("build/voice/ep-1.srt", "1\n00:00:00,000 --> 00:00:01,000\nhi\n")
+
+    doc = eai.assemble(proj)
+    assert len(doc.clips) == 3, doc.clips
+    assert doc.size == (1080, 1920), doc.size
+    assert [c.length for c in doc.clips] == [3.0, 5.0, 2.0], [c.length for c in doc.clips]
+    assert doc.duration == 10.0, doc.duration
+    assert all(c.kind == etl.IMAGE and c.volume == 0 for c in doc.clips), \
+        "stills carry no sound of their own"
+    voices = [a for a in doc.audio if a.role == etl.VOICE]
+    assert [a.start for a in voices] == [0.0, 3.0, 8.0], [a.start for a in voices]
+    assert all(a.gain_db == 0 for a in voices), "narration must not be ducked"
+    assert doc.captions == "build/voice/ep-1.srt", doc.captions
+    assert doc.problems(proj.dir) == [], doc.problems(proj.dir)
+
+    # a project with nothing but a render still opens in the editor
+    other = pj.create("Editor from a render", "youtube", {"episode_slug": "ep-2"})
+    other.ensure_dirs()
+    other.write_bytes("build/ep-2.mp4", b"v" * 500)
+    single = eai.assemble(other)
+    assert len(single.clips) == 1 and single.clips[0].volume == 1.0
+
+    # and one with nothing at all says so, instead of making an empty video
+    empty = pj.create("Editor with nothing", "youtube", {})
+    empty.ensure_dirs()
+    try:
+        eai.assemble(empty)
+        raise AssertionError("assembling from nothing should refuse")
+    except eai.EditorError as exc:
+        assert "nothing to edit" in str(exc), str(exc)
+
+    described = eai.describe(doc)
+    assert "id=" in described and "timeline 0.0s" in described, described
+    print(f"        3 scenes, {doc.duration}s, narration at {[a.start for a in voices]}")
+
+
+def test_editor_silence_and_shorts():
+    """Cutting dead air and cropping a Short, as arithmetic - the ffmpeg half is
+    covered by the integration suite."""
+    from digital_assets_studio.core.editor import ai as eai
+    from digital_assets_studio.core.editor import analyze
+    from digital_assets_studio.core.editor import timeline as etl
+
+    spans = analyze.keep_spans(10.0, [(2.0, 4.0), (7.0, 8.0)])
+    assert spans == [(0.0, 2.12), (3.88, 7.12), (7.88, 10.0)], spans
+    assert analyze.keep_spans(10.0, [(0.0, 10.0)]) == [], "an all-silent take keeps nothing"
+    assert analyze.parse_silences(
+        "[silencedetect] silence_start: 1.5\n[silencedetect] silence_end: 3.25 | "
+        "silence_duration: 1.75\n") == [(1.5, 3.25)]
+    assert analyze.parse_silences("silence_start: 4.0\n") == [], \
+        "a silence that never ends cannot be trimmed to"
+
+    doc = etl.Timeline()
+    clip = doc.add(etl.Clip(source="take.mp4", source_in=0, source_out=10, label="take"))
+    removed = eai.silence_cuts(doc, clip, [(2.0, 4.0), (7.0, 8.0)])
+    assert len(doc.clips) == 3, [c.source_in for c in doc.clips]
+    assert removed > 2.5, removed
+    assert doc.clips[0].source_in == 0.0 and doc.clips[-1].source_out == 10.0
+
+    doc2 = etl.Timeline()
+    only = doc2.add(etl.Clip(source="take.mp4", source_in=0, source_out=5))
+    assert eai.silence_cuts(doc2, only, [(0.0, 5.0)]) == 5.0
+    assert doc2.clips == [], "a take that is all silence should disappear"
+
+    # a Short is a window onto the same sources, not a re-render
+    long = etl.Timeline(width=1920, height=1080)
+    long.add(etl.Clip(source="a.mp4", source_in=0, source_out=20, label="A"))
+    long.add(etl.Clip(source="b.mp4", source_in=0, source_out=20, label="B"))
+    long.add_text(etl.Text(text="Inside", start=25, seconds=3))
+    long.add_text(etl.Text(text="Outside", start=2, seconds=1))
+    long.audio.append(etl.Audio(source="v.mp3", role=etl.VOICE, start=18.0, gain_db=0.0))
+    long.captions = "subs.srt"
+
+    start = eai.highlight_start(long, 10.0)
+    assert start == 0.0, f"a hint-free Short should start on the nearest clip boundary: {start}"
+    short = eai.crop(long, 22.0, 10.0, portrait=True)
+    assert short.size == (1080, 1920) and short.duration == 10.0, short.duration
+    assert len(short.clips) == 1 and short.clips[0].source_in == 2.0, short.clips[0]
+    assert [o.text for o in short.overlays] == ["Inside"], short.overlays
+    assert short.overlays[0].start == 3.0, short.overlays[0].start
+    assert short.captions == "", "subtitles timed to the long video must not be carried over"
+    voice = [a for a in short.audio if a.role == etl.VOICE][0]
+    assert voice.start == 0.0 and voice.source_in == 4.0, voice
+    assert eai.highlight_start(long, 60.0) == 0.0, "a window longer than the video starts at 0"
+    assert eai.highlight_start(long, 10.0, hint=5.0) == 5.0, "an explicit hint wins"
+    print(f"        {len(doc.clips)} pieces after the cut, Short from {start}s intact")
+
+
+def test_editor_screen():
+    """The editor screen builds, and its buttons do what they say - headless, so
+    a broken control shows up here rather than on someone's first render."""
+    from digital_assets_studio.core.editor import ai as eai
+    from digital_assets_studio.core.editor import timeline as etl
+    from digital_assets_studio.ui.studio import Studio
+
+    ensure_dirs()
+    page = StubPage()
+    studio = Studio(page)
+
+    # with no project open it offers the ones you have
+    studio.route = "editor"
+    studio.project = None
+    studio.refresh()
+    assert page.controls, "the editor with no project drew nothing"
+
+    proj = pj.create("Editor screen", "youtube", {
+        "topic": "t", "audience": "a", "language": "English", "episode_slug": "ep-s",
+        "video_engine": "AI timeline editor (cut it yourself)"})
+    proj.ensure_dirs()
+    for i in range(1, 3):
+        proj.write_bytes(f"build/voice/ep-s/scene_{i:03d}.mp3", b"m" * 80)
+        proj.write_bytes(f"build/scenes/ep-s/scene_{i:03d}.jpg", b"j" * 80)
+    proj.write_text("build/voice/ep-s.timings.json",
+                    json.dumps([{"seconds": 4.0}, {"seconds": 6.0}]))
+
+    studio.open_editor(proj.id)
+    assert studio.route == "editor" and studio.editor is not None
+    ed = studio.editor
+    ed.doc = eai.assemble(proj)
+    ed.selected = ed.doc.clips[0].id
+    ed.save(quiet=True)
+    studio.refresh()
+    assert page.controls, "the editor screen drew nothing"
+
+    # every edit the buttons make goes through the same path, and saves
+    ed.playhead = 2.0
+    ed.split_here()
+    assert len(ed.doc.clips) == 3, "split did not take"
+    ed.select(ed.doc.clips[1].id)
+    ed.set_prop("transition", etl.DISSOLVE)
+    assert ed.doc.clips[1].transition == etl.DISSOLVE
+    ed.mutate(lambda: ed.doc.duplicate(ed.doc.clips[0].id))
+    assert len(ed.doc.clips) == 4
+    ed.nudge(1)
+    ed.mutate(lambda: ed.doc.remove(ed.doc.clips[-1].id))
+    assert len(ed.doc.clips) == 3
+    assert etl.load(ed.path).to_dict() == ed.doc.to_dict(), "an edit was not saved to disk"
+
+    # the first clip can never be left transitioning in from nothing
+    assert ed.doc.clips[0].transition == etl.CUT
+
+    ed.set_canvas("Portrait 1080×1920")
+    assert ed.doc.size == (1080, 1920)
+    long_edit = etl.load(proj.dir / "edit" / "timeline.json").to_dict()
+    ed.make_short(5.0)
+    assert ed.doc.duration <= 5.0 and ed.doc.portrait, ed.doc.summary()
+    assert (proj.dir / "edit" / "short.json").exists(), "the Short timeline was not written"
+    assert etl.load(proj.dir / "edit" / "timeline.json").to_dict() == long_edit, \
+        "cutting a Short overwrote the long edit"
+    assert ed.is_short and ed.path.name == "short.json"
+    ed.open_document(short=False)
+    assert not ed.is_short and ed.doc.to_dict() == long_edit, "could not get back to the edit"
+
+    # publishing before rendering is refused rather than attempted
+    ed.publish()
+    assert not ed.out_path.exists()
+    studio.refresh()
+    assert page.controls
+
+    # the step that hands you off to this screen is wired to it
+    pl = get_pipeline("youtube")
+    assert pl.step("edit").opens == "editor", "the edit step must open the editor"
+    studio.open_project(proj.id)
+    for step in pl.active_steps(proj):
+        studio.select_step(step.id)
+    print(f"        {len(ed.doc.clips)} clips edited, saved, and the screen redrew each time")
+
+
 if __name__ == "__main__":
     print(f"workspace: {WORK}")
     check("views build", test_views)
@@ -945,6 +1345,12 @@ if __name__ == "__main__":
     check("file pickers and the channel list", test_file_and_channel_fields)
     check("video engines branch correctly", test_video_engines)
     check("captions wrap instead of overflowing", test_caption_wrapping)
+    check("editor: the timeline maths is exact", test_editor_timeline_arithmetic)
+    check("editor: every AI operation is validated", test_editor_operations_are_validated)
+    check("editor: the ffmpeg plan is right", test_editor_render_plan)
+    check("editor: a first cut from what a project has", test_editor_assembles_a_project)
+    check("editor: dead air and Shorts", test_editor_silence_and_shorts)
+    check("editor: the screen builds and edits", test_editor_screen)
     check("printables pipeline", test_printables)
     check("course pipeline", test_course)
     check("audiobook offline steps", test_audiobook_offline)

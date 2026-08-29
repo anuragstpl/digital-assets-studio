@@ -25,6 +25,7 @@ API and the UI does not run on it.
 python tests/lint.py          # undefined names and dead code, across every file
 python tests/smoke.py         # every screen, every pipeline, offline with a stub model
 python tests/integration.py   # every publishing connector against mock API servers
+python tests/editor.py        # what the video editor actually renders, frame by frame
 ```
 
 None of them needs credentials or network access. All three must pass before a
@@ -38,7 +39,13 @@ not.
 
 `tests/smoke.py` builds every screen with a stub page and runs each pipeline against
 a fake model, so a broken control or a broken step fails here rather than on a user's
-first run. `tests/integration.py` stands up local HTTP servers that speak YouTube,
+first run. `tests/editor.py` renders real videos from flat colours and pure tones and then
+reads them back: the average colour of a frame says which clip is on screen at
+that moment, and the mean volume of a window says what is audible in it. That is
+how a late cut, a clip in the wrong order, a crossfade that does not blend, a
+title that was not drawn or narration under the wrong scene gets caught - none of
+which shows up in an exit code. `tests/integration.py` stands up local HTTP
+servers that speak YouTube,
 Google Play, App Store Connect, Pexels, Pixabay and MoneyPrinterTurbo, then asserts
 what the connectors send and how they parse the replies.
 

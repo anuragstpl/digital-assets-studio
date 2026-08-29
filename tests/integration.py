@@ -1381,6 +1381,270 @@ def test_upload_picks_the_named_channel():
             yt.ACCOUNTS_FILE.unlink(missing_ok=True)
 
 
+
+# ================================================================= editor ====
+
+def _editor_project(name: str, engine: str = "AI timeline editor (cut it yourself)"):
+    """A YouTube project with real narration and real scene art on disk.
+
+    Both are made with ffmpeg rather than mocked: the whole point of the editor is
+    that it measures its media, and a fake mp3 with no duration would let a broken
+    timeline pass.
+    """
+    import subprocess
+
+    tts = _fake_tts()
+    proj = _youtube_project_for_render(engine, name)
+    for i, text in enumerate(["The hook line", "First block of narration",
+                              "Second block of narration"], start=1):
+        tts.synthesize(text, proj.dir / "build" / "voice" / "ep-r" / f"scene_{i:03d}.mp3")
+    scenes = proj.dir / "build" / "scenes" / "ep-r"
+    scenes.mkdir(parents=True, exist_ok=True)
+    for i, colour in enumerate(("navy", "teal", "maroon"), start=1):
+        subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i",
+                        f"color=c={colour}:size=1080x1920:duration=1", "-frames:v", "1",
+                        str(scenes / f"scene_{i:03d}.jpg")],
+                       capture_output=True, timeout=120, check=True)
+    proj.write_text("drafts/episodes/ep-r.md",
+                    "# Render test\n\nThe hook line. First block of narration. "
+                    "Second block of narration.")
+    return proj
+
+
+def test_editor_engine_end_to_end():
+    """Assemble, edit, render: the editor engine as a user would run it.
+
+    The assemble step measures the narration, lays a clip per scene and asks a
+    model for the titles; the render step turns that timeline into a real file.
+    This is the test that proves the filtergraphs the editor builds actually run.
+    """
+    from digital_assets_studio.core import pipeline as pipe
+    from digital_assets_studio.core.editor import timeline as etl
+    from digital_assets_studio.core.jobs import JobContext
+    from digital_assets_studio.core.llm import router
+    from digital_assets_studio.core.publishing import video
+    from digital_assets_studio.pipelines import get as get_pipeline
+
+    real = router.text_json
+    router.text_json = lambda role, user, system="", **kw: {"operations": [
+        {"op": "title", "text": "The hook", "start": 0.4, "seconds": 2.5,
+         "position": "lower_third"},
+        {"op": "fade_out", "seconds": 0.8},
+        {"op": "remove", "clip": 99},              # must be rejected, not applied
+    ]}
+    try:
+        proj = _editor_project("Editor engine")
+        pl = get_pipeline("youtube")
+        ids = {s.id for s in pl.active_steps(proj)}
+        assert "edit" in ids, "the editor engine must add the edit step"
+        assert {"stock_terms", "stock_footage", "ai_clips"}.isdisjoint(ids), \
+            "the editor engine must not drag in another engine's steps"
+
+        for done in ("script", "fix_script", "voiceover", "scene_art"):
+            pipe.mark_manual_done(proj, pl.step(done))
+        result = pipe.execute(pl, proj, pl.step("edit"), JobContext("t", "t"))
+
+        doc = etl.load(proj.dir / "edit" / "timeline.json")
+        assert len(doc.clips) == 3, f"one clip per narration block, got {len(doc.clips)}"
+        assert doc.size == (1080, 1920), f"portrait was requested, got {doc.size}"
+        assert len(doc.overlays) == 1, "the AI title was not applied"
+        assert doc.fade_out_seconds == 0.8, "the fade_out operation was dropped"
+        voices = [a for a in doc.audio if a.role == etl.VOICE]
+        assert len(voices) == 3, "every narration block must be laid on the timeline"
+        starts = [a.start for a in voices]
+        assert starts == sorted(starts) and starts[0] == 0.0, f"narration is out of order: {starts}"
+        assert "clips" in result.message, result.message
+
+        # a hand edit, exactly as the editor screen makes it, survives to the render
+        doc.trim(doc.clips[0].id, 0.0, 1.0)
+        doc.clips[1].transition = etl.DISSOLVE
+        doc.clips[1].transition_seconds = 0.4
+        doc.save(proj.dir / "edit" / "timeline.json")
+        expected = doc.duration
+
+        pipe.execute(pl, proj, pl.step("render"), JobContext("t", "t"))
+        out = proj.dir / "build" / "ep-r.mp4"
+        assert out.exists(), "the edit never rendered"
+        info = video.probe(out)
+        stream = [s for s in info["streams"] if s["codec_type"] == "video"][0]
+        assert (stream["width"], stream["height"]) == (1080, 1920), \
+            f"got {stream['width']}x{stream['height']}"
+        assert any(s["codec_type"] == "audio" for s in info["streams"]), \
+            "the narration never made it into the file"
+        got = float(info["format"]["duration"])
+        assert abs(got - expected) < 0.6, \
+            f"rendered {got:.2f}s but the timeline says {expected:.2f}s"
+    finally:
+        router.text_json = real
+
+
+def test_editor_renders_every_feature():
+    """Titles, a music bed, burned subtitles, a crossfade, a speed change, a
+    still and a fade to black - in one render, because a filtergraph only
+    collides with itself when everything is switched on at once."""
+    import subprocess
+
+    from digital_assets_studio.config import ASSETS_DIR
+    from digital_assets_studio.core.editor import analyze, render as erender
+    from digital_assets_studio.core.editor import timeline as etl
+
+    work = Path(WORK) / "editor-features"
+    work.mkdir(parents=True, exist_ok=True)
+
+    def make(args):
+        subprocess.run(["ffmpeg", "-y", *args], capture_output=True, timeout=300, check=True)
+
+    make(["-f", "lavfi", "-i", "testsrc=size=640x360:rate=25:duration=6",
+          "-f", "lavfi", "-i", "sine=frequency=440:duration=6", "-c:v", "libx264",
+          "-c:a", "aac", "-shortest", str(work / "take.mp4")])
+    make(["-f", "lavfi", "-i", "smptebars=size=640x360:rate=25:duration=4",
+          "-c:v", "libx264", str(work / "silent.mp4")])          # no audio stream at all
+    make(["-f", "lavfi", "-i", "color=c=teal:size=800x600:duration=1", "-frames:v", "1",
+          str(work / "still.jpg")])
+    make(["-f", "lavfi", "-i", "sine=frequency=180:duration=20", "-c:a", "libmp3lame",
+          str(work / "music.mp3")])
+    (work / "subs.srt").write_text("1\n00:00:00,000 --> 00:00:02,000\nBurned in\n\n",
+                                   encoding="utf-8")
+
+    doc = etl.Timeline(name="features", width=640, height=360, fps=25)
+    doc.add(etl.Clip(source="take.mp4", source_in=0.5, source_out=4.5, volume=0.6,
+                     label="take"))
+    doc.add(etl.Clip(source="silent.mp4", source_in=0, source_out=3, speed=1.5,
+                     transition=etl.DISSOLVE, transition_seconds=0.8, label="silent"))
+    doc.add(etl.Clip(source="still.jpg", kind=etl.IMAGE, source_out=3, brightness=0.05,
+                     saturation=1.2, label="still"))
+    doc.add_text(etl.Text(text="A title long enough that it has to wrap onto more than one "
+                               "line inside the frame", start=0.5, seconds=3))
+    doc.set_music("music.mp3", gain_db=-24)
+    doc.captions = "subs.srt"
+    doc.fade_out_seconds = 1.0
+
+    assert doc.problems(work) == [], doc.problems(work)
+    seen = []
+    out = erender.render(doc, work / "final.mp4", base=work,
+                         font=ASSETS_DIR / "fonts" / "Poppins-Medium.ttf",
+                         progress=lambda f, m: seen.append(m))
+    info = analyze.probe(out)
+    assert info.has_video and info.has_audio, "a feature render lost a stream"
+    assert abs(info.seconds - doc.duration) < 0.4, \
+        f"rendered {info.seconds:.2f}s, timeline says {doc.duration:.2f}s"
+    assert (info.width, info.height) == (640, 360)
+    assert any("Titles" in m for m in seen), f"the finishing pass never ran: {seen}"
+
+    # and the cut-only path, which joins by copy rather than re-encoding
+    plain = etl.Timeline(width=640, height=360, fps=25)
+    plain.add(etl.Clip(source="take.mp4", source_in=0, source_out=2))
+    plain.add(etl.Clip(source="silent.mp4", source_in=0, source_out=2))
+    joined = erender.render(plain, work / "cuts.mp4", base=work)
+    cut_info = analyze.probe(joined)
+    assert abs(cut_info.seconds - 4.0) < 0.4, f"cut-only join came out {cut_info.seconds:.2f}s"
+
+    # the editor preview: the frame under the playhead, from the right clip and
+    # the right moment inside it
+    shot = erender.preview_frame(doc, work, 1.0, work / "preview.jpg", width=320)
+    assert shot is not None and Path(shot).exists(), "no preview frame came back"
+    assert analyze.probe(work / "preview.jpg").width == 320, "the preview was not scaled"
+    still = erender.preview_frame(doc, work, doc.duration - 0.5, work / "still.jpg")
+    assert Path(still).name == "still.jpg", "a still should preview as itself, not a re-encode"
+
+
+def test_editor_cuts_real_silence():
+    """Dead air is found by listening to the file, not by guessing."""
+    import subprocess
+
+    from digital_assets_studio.core.editor import ai as eai
+    from digital_assets_studio.core.editor import analyze, render as erender
+    from digital_assets_studio.core.editor import timeline as etl
+
+    work = Path(WORK) / "editor-silence"
+    work.mkdir(parents=True, exist_ok=True)
+    # tone, four seconds of nothing, tone - the shape of a take worth tightening
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:duration=9",
+         "-f", "lavfi", "-i",
+         "aevalsrc='if(lt(t,2)+gt(t,6),0.5*sin(440*2*PI*t),0)':d=9",
+         "-c:v", "libx264", "-c:a", "aac", "-shortest", str(work / "take.mp4")],
+        capture_output=True, timeout=300, check=True)
+
+    found = analyze.silences(work / "take.mp4")
+    assert found, "the four-second gap was not detected"
+    assert 1.5 < found[0][0] < 2.5 and 5.5 < found[0][1] < 6.5, found
+
+    doc = etl.Timeline(width=320, height=240, fps=25)
+    doc.add(etl.Clip(source="take.mp4", source_in=0, source_out=9, label="take"))
+    before = doc.duration
+    removed = eai.cut_dead_air(doc, work)
+    assert removed > 3.0, f"only {removed}s removed from a four-second gap"
+    assert len(doc.clips) == 2, f"the take should be in two pieces, got {len(doc.clips)}"
+    assert doc.duration < before - 3.0, doc.duration
+    # and the tightened take still renders, vertically, as a Short
+    short = eai.crop(doc, 0.0, min(3.0, doc.duration), portrait=True)
+    assert short.size == (1080, 1920)
+    out = erender.render(short, work / "short.mp4", base=work)
+    assert analyze.probe(out).seconds > 2.0, "the Short came out empty"
+
+
+def test_editor_publishes_its_own_cut():
+    """The editor's publish button: upload the rendered edit, decorate it and
+    report the link, without going through the pipeline's upload step."""
+    from digital_assets_studio.core.editor import publish as epublish
+
+    with MockAPI() as api:
+        _youtube_api(api)
+        api.json_route("GET", "/youtube/v3/channels", CHANNEL)
+
+        @api.route("POST", r"/upload/youtube/v3/videos")
+        def start(req, m):
+            body = req.json()
+            assert body["snippet"]["title"] == "The cut I made", body
+            assert body["status"]["privacyStatus"] == "unlisted", body
+            return 200, {"Location": api.base + "/resume/e"}, b"{}"
+
+        received = {"bytes": 0}
+
+        @api.route("PUT", r"/resume/e")
+        def put(req, m):
+            received["bytes"] += len(req.body)
+            return 200, {"Content-Type": "application/json"}, json.dumps(
+                {"id": "EDIT1"}).encode()
+
+        api.json_route("POST", "/upload/youtube/v3/thumbnails/set", {"items": [{}]})
+        api.json_route("POST", "/upload/youtube/v3/captions", {"id": "c1"})
+
+        proj = _project("youtube", {
+            "topic": "t", "audience": "a", "language": "English",
+            "mode": "Use a channel I already have", "episode_slug": "ep-cut",
+        }, "Editor publish")
+        proj.write_text("drafts/episodes/ep-cut.metadata.json", json.dumps(
+            {"titles": ["From the metadata step"], "description": "Written earlier",
+             "tags": ["editing"]}))
+        cut = proj.write_bytes("build/ep-cut.edit.mp4", b"e" * 14_000)
+        thumb = proj.write_bytes("build/thumbnails/ep-cut_v1.jpg", b"j" * 2500)
+        subs = proj.write_text("build/voice/ep-cut.srt",
+                               "1\n00:00:00,000 --> 00:00:01,000\nhi\n")
+
+        # the form opens filled in from what the pipeline already wrote
+        defaults = epublish.default_metadata(proj)
+        assert defaults["title"] == "From the metadata step", defaults
+        assert defaults["description"] == "Written earlier"
+
+        out = epublish.publish(proj, cut, title="The cut I made",
+                               description=defaults["description"], tags=defaults["tags"],
+                               privacy="unlisted", thumbnail=thumb, captions=subs)
+        assert out["id"] == "EDIT1" and out["url"] == "https://youtu.be/EDIT1", out
+        assert not out["warnings"], out["warnings"]
+        assert received["bytes"] == cut.stat().st_size, "the edited file was not uploaded whole"
+        assert api.sent("POST", "/thumbnails/set"), "the thumbnail was never set"
+        assert api.sent("POST", "/captions"), "subtitles were never uploaded"
+        assert proj.answer("video_url") == "https://youtu.be/EDIT1"
+
+        try:
+            epublish.publish(proj, proj.dir / "build" / "nope.mp4", title="x")
+            raise AssertionError("publishing a file that is not there should raise")
+        except epublish.PublishError as exc:
+            assert "Render the edit first" in str(exc), str(exc)
+
+
 if __name__ == "__main__":
     print(f"workspace: {WORK}\n")
     check("youtube: channel read and recent uploads", test_youtube_channel_read)
@@ -1418,6 +1682,12 @@ if __name__ == "__main__":
     check("pipeline: AI-video render end to end", test_render_with_ai_engine)
     check("pipeline: publish a video from your own folder", test_render_from_a_local_file)
     check("pipeline: upload goes to the chosen channel", test_upload_picks_the_named_channel)
+    print()
+    check("editor: assemble, edit and render an episode", test_editor_engine_end_to_end)
+    check("editor: titles, music, subtitles and transitions all render",
+          test_editor_renders_every_feature)
+    check("editor: dead air is measured and cut", test_editor_cuts_real_silence)
+    check("editor: publishes its own cut to YouTube", test_editor_publishes_its_own_cut)
     print()
     if FAILURES:
         print(f"{len(FAILURES)} FAILURE(S)")

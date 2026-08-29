@@ -108,6 +108,9 @@ class Step:
     gate: str = EXTERNAL              # manual steps only
     autofill: Callable[[Project], dict] | None = None   # what autopilot answers for you
     needs_attention: bool = False     # opens a window / needs you at the keyboard
+    # a screen this step hands you off to - the video editor is the only one so
+    # far, and a step whose output you finish by hand needs a way in
+    opens: str = ""
 
     def applies(self, project: Project) -> bool:
         """Some steps only exist on one branch of a pipeline - creating a YouTube

@@ -9,6 +9,9 @@ from pathlib import Path
 from ...config import (ASSETS_DIR, ROLE_IMAGE_PROMPT, ROLE_MARKETING, ROLE_METADATA,
                        ROLE_PLANNING, ROLE_RESEARCH,
                        ROLE_SCRIPT)
+from ...core.editor import ai as edit_ai
+from ...core.editor import render as edit_render
+from ...core.editor import timeline as edit_timeline
 from ...core.jobs import JobContext
 from ...core.llm import router
 from ...core.pipeline import (AUTO, EXTERNAL, MANUAL, REVIEW, Field_, Link, Pipeline,
@@ -590,7 +593,9 @@ def _step_render(p: Project, ctx: JobContext) -> StepResult:
             "  macOS:    brew install ffmpeg\n"
             "Then restart Digital Assets Studio and run this step again.")
 
-    if engine == ENGINE_STOCK:
+    if engine == ENGINE_EDIT:
+        _render_edit(p, ctx, slug, out)
+    elif engine == ENGINE_STOCK:
         _render_stock(p, ctx, slug, portrait, out)
     elif engine == ENGINE_AI:
         _render_stock(p, ctx, slug, portrait, out,
@@ -627,6 +632,62 @@ def _step_render(p: Project, ctx: JobContext) -> StepResult:
     return StepResult(f"Rendered with {engine} — {dur / 60:.1f} minutes, {mb:.0f} MB, {shape}",
                       [f"build/{slug}.mp4", f"build/voice/{slug}.srt"],
                       {"video_file": f"build/{slug}.mp4", "video_seconds": round(dur, 1)})
+
+
+def _edit_path(p: Project) -> Path:
+    return p.dir / "edit" / "timeline.json"
+
+
+def _step_edit(p: Project, ctx: JobContext) -> StepResult:
+    """Build an editable cut, and let a model choose the on-screen titles.
+
+    This is the one step whose output you are expected to change by hand: it
+    writes a timeline, not a video, and the editor screen is where it gets
+    finished. Re-running it starts the cut again from the media, so an edit you
+    have already made is worth rendering before you press this twice.
+    """
+    slug, _ = _episode(p)
+    doc = edit_ai.assemble(p, slug, portrait=_portrait(p), note=lambda m: ctx.log(m))
+    titles = 0
+    script = p.read_text(f"drafts/episodes/{slug}.md", "")
+    if script:
+        ctx.progress(0.7, "Choosing the on-screen titles")
+        try:
+            applied, rejected = edit_ai.apply_ops(
+                doc, edit_ai.suggest_titles(doc, script), p.dir)
+            titles = len(doc.overlays)
+            for line in applied:
+                ctx.log(line)
+            for line in rejected:
+                ctx.log(line, "warning")
+        except Exception as exc:  # noqa: BLE001 - the cut matters, the titles do not
+            ctx.log(f"No AI titles this time: {exc}", "warning")
+    doc.save(_edit_path(p))
+    return StepResult(
+        f"{doc.summary()}, {titles} title(s). Open the editor to trim it, then render.",
+        ["edit/timeline.json"],
+        {"edit_timeline": "edit/timeline.json", "video_seconds": round(doc.duration, 1)})
+
+
+def _render_edit(p: Project, ctx: JobContext, slug: str, out: Path) -> None:
+    """Render the timeline the editor holds, rather than a fresh assembly.
+
+    If you never opened the editor there is still a timeline on disk from the
+    assemble step, so this behaves like any other engine.
+    """
+    path = _edit_path(p)
+    if not path.exists():
+        raise RuntimeError(
+            "There is no edit to render yet. Run “Assemble the edit” first, or open the "
+            "editor and build one.")
+    doc = edit_timeline.load(path)
+    if not doc.clips:
+        raise RuntimeError("The timeline is empty. Open the editor and add a clip.")
+    problems = [x for x in doc.problems(p.dir) if "missing" in x or "no file at" in x]
+    if problems:
+        raise RuntimeError("This edit cannot be rendered yet:\n- " + "\n- ".join(problems))
+    edit_render.render(doc, out, p.dir, font=FONT_FILE,
+                       progress=lambda f, m: ctx.progress(f, m))
 
 
 def _upload_path(p: Project, slug: str) -> Path:
@@ -777,7 +838,8 @@ ENGINE_STOCK = "Stock footage (Pexels / Pixabay)"
 ENGINE_AI = "AI video (OpenRouter models)"
 ENGINE_MPT = "MoneyPrinterTurbo server"
 ENGINE_LOCAL = "A video I already have"
-ENGINES = [ENGINE_SLIDES, ENGINE_STOCK, ENGINE_AI, ENGINE_MPT, ENGINE_LOCAL]
+ENGINE_EDIT = "AI timeline editor (cut it yourself)"
+ENGINES = [ENGINE_SLIDES, ENGINE_STOCK, ENGINE_AI, ENGINE_MPT, ENGINE_LOCAL, ENGINE_EDIT]
 
 ENGINE_HELP = (
     "Designed slides need nothing but ffmpeg. Stock footage needs a free Pexels or "
@@ -785,7 +847,9 @@ ENGINE_HELP = (
     "looking option and the only one that costs real money per video. "
     "MoneyPrinterTurbo needs its own server running. "
     "“A video I already have” skips rendering entirely and publishes a file from your "
-    "own disk — see Settings › Publishing."
+    "own disk — see Settings › Publishing. "
+    "“AI timeline editor” builds an editable cut from the narration and the scenes, "
+    "opens in the editor for you to trim, title and score it, and renders that."
 )
 
 VIDEO_SUFFIXES = (".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi")
@@ -816,6 +880,15 @@ def _uses_mpt(p: Project) -> bool:
 
 def _uses_local(p: Project) -> bool:
     return _engine(p) == ENGINE_LOCAL
+
+
+def _uses_editor(p: Project) -> bool:
+    return _engine(p) == ENGINE_EDIT
+
+
+def _needs_scene_art(p: Project) -> bool:
+    """The editor cuts pictures too - it just lets you rearrange them afterwards."""
+    return _uses_slides(p) or _uses_editor(p)
 
 
 def _needs_local_voice(p: Project) -> bool:
@@ -1114,7 +1187,7 @@ YOUTUBE_PIPELINE = Pipeline(
                            "do not have to match anything."),
              checklist=["Recorded", "Files named in order", "Levels checked on headphones"]),
         Step("scene_art", "Draw the scenes", "Content", AUTO, run=_step_scene_art,
-             requires=["script"], applies_when=_uses_slides,
+             requires=["script"], applies_when=_needs_scene_art,
              summary="One slide per scene in the channel palette, optionally with AI b-roll behind it.",
              fields=[
                  Field_("orientation", "Orientation", "select",
@@ -1161,8 +1234,17 @@ YOUTUBE_PIPELINE = Pipeline(
              produces=["build/aiclips"], run_label="Generate AI footage",
              cost_hint="Billed per clip by OpenRouter — the only step here that costs "
                        "more than pennies"),
+        Step("edit", "Assemble the edit", "Content", AUTO, run=_step_edit,
+             requires=["voiceover", "scene_art", "fix_script"], applies_when=_uses_editor,
+             opens="editor",
+             summary="Cuts the narration and the scenes into an editable timeline, and asks "
+                     "a model for the two or three titles worth putting on screen. Open the "
+                     "editor to trim, reorder, score and caption it.",
+             produces=["edit/timeline.json"], run_label="Assemble the edit",
+             cost_hint="1 cheap call for the titles"),
         Step("render", "Render the video", "Content", AUTO, run=_step_render,
-             requires=["voiceover", "scene_art", "stock_footage", "ai_clips", "fix_script"],
+             requires=["voiceover", "scene_art", "stock_footage", "ai_clips", "fix_script",
+                       "edit"],
              summary="Designed slides, stock footage, generated footage, a MoneyPrinterTurbo "
                      "server, or a file you cut yourself — whichever engine this project uses. "
                      "Captions are cut to the narration either way.",

@@ -71,7 +71,7 @@ straight into your OS credential store; see [SECURITY.md](SECURITY.md).
 
 ## What it actually does
 
-Seven pipelines, 92 steps, 61 of them automated.
+Seven pipelines, 98 steps, 67 of them automated.
 
 | Pipeline | Automated | Needs you |
 |---|---|---|
@@ -99,10 +99,10 @@ neither library guarantees a model release, and a face on a cover implies that
 person endorses the book. Both licences let you build a cover from the image; they
 do not let you sell the image itself.
 
-### Five video engines
+### Six video engines
 
 A YouTube project picks one, and the pipeline reshapes around it — the steps that
-belong to the other four disappear:
+belong to the other five disappear:
 
 | Engine | What it needs | What you get |
 |---|---|---|
@@ -111,6 +111,7 @@ belong to the other four disappear:
 | **AI video** | an OpenRouter key — the same one the text roles use | original footage generated from each scene's visual brief by Veo, Sora, Kling, Seedance, Wan, Hailuo or whatever else OpenRouter serves that day, laid under your own narration |
 | **MoneyPrinterTurbo** | your own instance running (`python main.py` in its folder, API on port 8080 — *not* `webui.bat`, which is a separate Streamlit app on 8501) | the whole job handed to it, the finished file collected |
 | **A video I already have** | a file, or a folder to take the newest video from | no render at all: the file is copied into the project untouched and goes straight to metadata, thumbnails and upload |
+| **AI timeline editor** | nothing but ffmpeg | a real cut you can open and change: one clip per narration block, trimmed, reordered, crossfaded, titled and scored in the editor, then rendered from the timeline |
 
 All of them produce **long-form 16:9 and vertical 9:16**. The Shorts step will
 either crop the long video or, on the stock, AI and MoneyPrinterTurbo engines,
@@ -127,6 +128,40 @@ changes often enough that a model name from last month is not worth trusting.
 The **own-file** engine is for the case where you cut the video somewhere else and
 only want the publishing half: it still writes the metadata, renders the thumbnails
 and uploads, and it never touches or re-encodes your original.
+
+### The video editor
+
+A timeline editor lives in the sidebar, and it opens on any project — not only one
+using the editor engine. It assembles a first cut from what the project already
+has: one clip per narration block, the scene art or the footage over it, the voice
+laid on top, the subtitles already timed. From there it is an editor.
+
+- **Cut it by hand.** Trim in and out points, split at the playhead, reorder,
+  duplicate, delete. Per-clip speed, volume, brightness, contrast and saturation,
+  a slow push on the stills, and a cut, fade, dissolve or slide between any two
+  clips. The preview shows the frame the playhead is on.
+- **Or say what you want.** Type *lose the first eight seconds, dissolve between
+  the scenes, and put a title on the hook* and a model answers with a list of
+  operations — trim, reorder, split, speed, transition, title, music, fade — which
+  are validated against the timeline before any of them is applied. It can only
+  ask for edits the editor already knows how to make, every one is checked, and
+  anything it invents comes back as a refusal with a reason rather than a
+  corrupted edit.
+- **Cut the dead air.** The silences are measured out of the audio itself, then
+  the take is split into the parts where somebody is speaking, padded so a cut
+  never clips the start of a word.
+- **Make a Short.** Any window of the edit becomes a fresh vertical timeline —
+  the same sources, re-pointed, so it costs one render and no quality.
+- **Publish it.** Title and description arrive pre-filled from the metadata step;
+  the editor uploads the rendered cut, sets the thumbnail and the subtitle track,
+  adds it to a playlist and hands back the link. Visibility defaults to private,
+  and going public asks first.
+
+The edit is a JSON file in the project (`edit/timeline.json`), so it survives a
+crash, can be diffed, and can be handed back to a model. Rendering is three ffmpeg
+passes — normalise each clip, join them (a run of straight cuts is copied rather
+than re-encoded), then one finishing pass for titles, subtitles, music and the
+fade — and the pipeline's upload step publishes whatever the editor last rendered.
 
 The stock engine is a native implementation of the approach
 [MoneyPrinterTurbo](https://github.com/harry0703/MoneyPrinterTurbo) popularised

@@ -54,3 +54,6 @@ jobs:
 
       - name: Integration suite
         run: python tests/integration.py
+
+      - name: Video editor suite
+        run: python tests/editor.py

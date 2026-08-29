@@ -2,6 +2,33 @@
 
 All notable changes are recorded here. Versions follow [semantic versioning](https://semver.org).
 
+## [0.7.0] - 2026-08-29
+
+### Added
+- **A video editor, with an AI that edits.** A timeline screen in the sidebar,
+  open on any project: trim, split, reorder, speed, volume, colour, transitions,
+  on-screen titles, a ducked music bed, burned subtitles and a fade to black,
+  with a preview of the frame under the playhead. It assembles a first cut from
+  the project's own narration and scenes, cuts dead air by measuring the silences,
+  crops a vertical Short out of any window, and publishes the rendered edit to
+  YouTube — thumbnail, subtitles, playlist and link — without going back through
+  the pipeline. Plain-English direction is answered with a list of operations that
+  are validated against the timeline before any is applied, so a model can only
+  ask for edits the editor already knows how to make.
+- **A sixth video engine, "AI timeline editor"**, which renders a YouTube episode
+  from that timeline instead of straight from the media, so the cut is yours to
+  change before it is published.
+
+### Fixed
+- **A per-cent sign made burned-in text disappear.** ffmpeg's drawtext reads its
+  text as a template unless told otherwise, so a caption or title containing
+  "50% off" or "up 12%" rendered as nothing at all - no error, no warning, just a
+  missing line. Both burn-in paths now switch expansion off. This affected the
+  designed-slides captions as well as the editor's titles.
+- ffmpeg's output is now decoded as UTF-8 rather than by the platform default, so
+  an accented character in a filename no longer raises a `UnicodeDecodeError` in
+  place of the render error it was trying to report.
+
 ## [0.6.0]
 
 ### Added

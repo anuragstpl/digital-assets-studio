@@ -20,7 +20,8 @@ from ..core.settings import load as load_settings, save as save_settings
 from ..pipelines import PIPELINES, get as get_pipeline
 from ..theme import RADIUS, RADIUS_SM, build_theme, palette
 from .components import primary_button, snack
-from .views import activity, home, new_project, pipeline_view, projects_view, settings_view
+from .views import (activity, editor_view, home, new_project, pipeline_view, projects_view,
+                    settings_view)
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ STRICT_RENDER = bool(os.environ.get("DAS_STRICT_RENDER"))
 NAV = [
     ("home", ft.Icons.GRID_VIEW_ROUNDED, "Home"),
     ("projects", ft.Icons.FOLDER_ROUNDED, "Projects"),
+    ("editor", ft.Icons.VIDEO_SETTINGS_ROUNDED, "Editor"),
     ("activity", ft.Icons.RECEIPT_LONG_ROUNDED, "Activity"),
     ("settings", ft.Icons.TUNE_ROUNDED, "Settings"),
 ]
@@ -43,6 +45,9 @@ class Studio:
         self.project: pj.Project | None = None
         self.pipeline = None
         self.selected_step: str | None = None
+        # the video editor's state: one per project, kept alive across redraws so
+        # an unsaved trim is not lost every time the screen repaints
+        self.editor = None
         self.draft: dict = {}
         self.step_log: list[str] = []
         self.log_lines: list[str] = []
@@ -147,6 +152,36 @@ class Studio:
         self.selected_step = nxt.id if nxt else (self.pipeline.steps[0].id if self.pipeline else None)
         self.step_log = []
         self.navigate("project")
+
+    def open_editor(self, project_id: str | None = None) -> None:
+        """Open the video editor on a project.
+
+        The editor is a screen, not a step: you reach it from the render step, from
+        the sidebar, or straight from a project, and it edits whatever that project
+        has produced."""
+        if project_id and (self.project is None or self.project.id != project_id):
+            proj = pj.load(project_id)
+            if proj is None:
+                self.toast("That project could not be read.", "error")
+                return
+            self.project = proj
+            self.pipeline = get_pipeline(proj.kind)
+            self.editor = None
+        if self.project is None:
+            self.navigate("editor")
+            return
+        if self.editor is not None and self.editor.project.id != self.project.id:
+            self.editor = None
+        telemetry.track("editor_opened", {"kind": self.project.kind})
+        self.navigate("editor")
+
+    def browse_media(self, on_pick) -> None:
+        """Pick any file the editor can take: a clip, a still, or a music bed."""
+        extensions = [s.lstrip(".") for s in
+                      (editor_view.tl.VIDEO_SUFFIXES + editor_view.tl.IMAGE_SUFFIXES
+                       + editor_view.tl.AUDIO_SUFFIXES)]
+        self.browse_for(pipe.Field_("media", "a video, image or audio file", "file",
+                                    extensions=extensions), on_pick)
 
     def select_step(self, step_id: str) -> None:
         self.selected_step = step_id
@@ -527,6 +562,8 @@ class Studio:
             return new_project.build(self)
         if self.route == "project":
             return pipeline_view.build(self)
+        if self.route == "editor":
+            return editor_view.build(self)
         if self.route == "settings":
             return settings_view.build(self)
         if self.route == "activity":

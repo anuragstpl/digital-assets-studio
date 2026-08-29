@@ -55,6 +55,8 @@ def main() -> int:
               f"(needs a free Pexels or Pixabay key)")
         print(f"  {'ok      ' if mpt.configured() else 'absent  '} MoneyPrinterTurbo "
               f"({mpt.base_url()})")
+        print(f"  {'ok      ' if shutil.which('ffmpeg') else 'MISSING '} AI timeline editor "
+              f"(needs ffmpeg; ffprobe gives it previews)")
     except Exception as exc:  # noqa: BLE001
         print(f"\nCould not load the app package: {exc}")
         bad += 1
