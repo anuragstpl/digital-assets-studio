@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 
 APP_NAME = "Digital Assets Studio"
 APP_ID = "digital-assets-studio"
-APP_VERSION = "0.7.1"
+APP_VERSION = "0.7.2"
 TAGLINE = "One suite. Every digital asset."
 
 # Aptabase ingest key for anonymous usage analytics. It is a write-only key and

@@ -2,6 +2,27 @@
 
 All notable changes are recorded here. Versions follow [semantic versioning](https://semver.org).
 
+## [0.7.2] - 2026-08-29
+
+### Fixed
+- **The window binary was never installed, so no packaged build could open.**
+  `flet[desktop]` is an optional extra, and requirements.txt only asked for
+  `flet` - which installs the framework and no view. Every build made on a clean
+  machine, CI included, therefore shipped without one, and a source install on a
+  clean environment had the same problem. The app starts, cannot find a view,
+  relaunches itself through `sys.executable`, and repeats that forever.
+- The Windows release job reported success on exactly that build, because the app
+  is windowed: PowerShell does not wait for it and never sees its exit code. The
+  verify step now waits, prints what the selftest said, and fails on it - and a
+  second step checks the view binary is in the bundle at all.
+- `packaging/das.spec` refuses to build without a view rather than producing a
+  package that cannot open, and collects whichever view package is installed
+  (`flet_desktop`, or `flet_desktop_light` on Linux).
+
+**0.7.0 and 0.7.1 are affected and should not be used.** 0.7.1 also has no macOS
+build: the same missing dependency failed the DMG job, which is the correct
+outcome for a build that could not have opened a window.
+
 ## [0.7.1] - 2026-08-29
 
 ### Fixed

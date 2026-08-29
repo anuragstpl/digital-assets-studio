@@ -1,5 +1,8 @@
 # Core application
-flet==0.28.3
+# The [desktop] extra is what carries the Flutter binary that draws the window.
+# Plain `flet` installs the framework and no view: the app then starts, cannot
+# find one, relaunches itself, and repeats that forever without ever appearing.
+flet[desktop]==0.28.3
 httpx>=0.27
 keyring>=25.0
 Pillow>=10.3

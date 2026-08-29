@@ -46,8 +46,28 @@ jobs:
       - name: Build the app
         run: pyinstaller packaging/das.spec --noconfirm
 
+      # The app is built windowed, so PowerShell does not wait for it and never
+      # sees its exit code: this step reported success on a build that could not
+      # open a window at all. Wait for it, read what it printed, and fail on it.
       - name: Verify the build
-        run: dist\DigitalAssetsStudio\DigitalAssetsStudio.exe --selftest
+        shell: pwsh
+        run: |
+          $exe = "dist\DigitalAssetsStudio\DigitalAssetsStudio.exe"
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -Wait -PassThru `
+                 -RedirectStandardOutput selftest.txt -RedirectStandardError selftest.err
+          Get-Content selftest.txt
+          if (Test-Path selftest.err) { Get-Content selftest.err }
+          if ($p.ExitCode -ne 0) { throw "selftest failed with exit code $($p.ExitCode)" }
+
+      - name: The window binary has to be in the bundle
+        shell: pwsh
+        run: |
+          $view = Get-ChildItem -Path dist\DigitalAssetsStudio\_internal `
+                    -Recurse -Filter flet.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $view) {
+            throw "flet.exe is not in the bundle - this build would relaunch itself forever"
+          }
+          "found $($view.FullName)"
 
       - name: Read the version
         id: version

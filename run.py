@@ -60,12 +60,20 @@ def selftest() -> int:
     # other check here - and then, on a user's machine, start, fail to find the
     # view, relaunch itself, and repeat forever without ever drawing a window.
     # That shipped once. It does not ship again.
+    view = None
+    for module in ("flet_desktop", "flet_desktop_light"):
+        try:
+            view = __import__(module)
+            break
+        except ImportError:
+            continue
     try:
         from pathlib import Path as _Path
 
-        import flet_desktop
-
-        app_dir = _Path(flet_desktop.__file__).resolve().parent / "app"
+        if view is None:
+            raise ImportError("no flet desktop view package is installed "
+                              "(pip install 'flet[desktop]')")
+        app_dir = _Path(view.__file__).resolve().parent / "app"
         names = ("flet.exe", "flet", "Flet.app")
         found = ([f for f in app_dir.rglob("*") if f.name in names]
                  if app_dir.exists() else [])
@@ -76,7 +84,7 @@ def selftest() -> int:
         else:
             print(f"  window     {found[0].name} present")
     except Exception as exc:  # noqa: BLE001
-        problems.append(f"flet_desktop not importable: {exc}")
+        problems.append(f"the desktop view is unusable: {exc}")
 
     if problems:
         print("\nFAILED")

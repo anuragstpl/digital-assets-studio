@@ -24,7 +24,22 @@ APP_NAME = "Digital Assets Studio"
 # build without it does not fail: it starts, cannot find the view, relaunches
 # itself through sys.executable, and does that forever without ever drawing a
 # window. Collect it explicitly, and keep --selftest honest about it.
-FLET_VIEW = collect_data_files("flet_desktop", include_py_files=False)
+FLET_VIEW = []
+FLET_VIEW_MODULES = []
+for _view in ("flet_desktop", "flet_desktop_light"):
+    try:
+        FLET_VIEW += collect_data_files(_view, include_py_files=False)
+        FLET_VIEW_MODULES.append(_view)
+    except Exception:                       # not installed on this platform
+        pass
+if not FLET_VIEW:
+    raise SystemExit(
+        "No Flet desktop view found. Install it before building:
+"
+        "    pip install 'flet[desktop]==0.28.3'
+"
+        "Without it the packaged app starts, cannot find a window, and relaunches "
+        "itself forever.")
 
 sys.path.insert(0, str(ROOT))
 from digital_assets_studio.config import APP_VERSION  # noqa: E402
@@ -44,7 +59,7 @@ a = Analysis(
             "digital_assets_studio/assets")] + FLET_VIEW,
     hiddenimports=[
         "digital_assets_studio",
-        "flet_desktop",
+        *FLET_VIEW_MODULES,
         "keyring.backends.Windows",
         "keyring.backends.macOS",
         "keyring.backends.SecretService",
