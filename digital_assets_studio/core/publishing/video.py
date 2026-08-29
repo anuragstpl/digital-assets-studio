@@ -30,7 +30,7 @@ def ffmpeg() -> str:
             "ffmpeg is not installed or not on PATH.\n"
             "  Windows:  winget install Gyan.FFmpeg\n"
             "  macOS:    brew install ffmpeg\n"
-            "Then restart Digital Assets Studio.")
+            "Then restart Artalo Digi Suit.")
     return exe
 
 

@@ -507,20 +507,22 @@ class Studio:
 
     def _sidebar(self) -> ft.Control:
         p = self.palette
+        # the mark is derived from APP_NAME rather than written out, so a rename
+        # cannot leave the old name sitting in the corner of every screen
+        first, _, rest = APP_NAME.partition(" ")
         items: list[ft.Control] = [
             ft.Container(
                 content=ft.Row([
-                    ft.Container(content=ft.Text("D", size=17, weight=ft.FontWeight.W_700,
-                                                 color="#FFFFFF"),
+                    ft.Container(content=ft.Text(first[:1].upper(), size=17,
+                                                 weight=ft.FontWeight.W_700, color="#FFFFFF"),
                                  width=34, height=34, border_radius=11,
                                  gradient=ft.LinearGradient(
                                      begin=ft.alignment.top_left, end=ft.alignment.bottom_right,
                                      colors=[p.accent_grad_a, p.accent_grad_b]),
                                  alignment=ft.alignment.center),
                     ft.Column([
-                        ft.Text("Digital Assets", size=14, weight=ft.FontWeight.W_700,
-                                color=p.text),
-                        ft.Text("Studio", size=11, color=p.text_faint),
+                        ft.Text(first, size=14, weight=ft.FontWeight.W_700, color=p.text),
+                        ft.Text(rest or "Studio", size=11, color=p.text_faint),
                     ], spacing=0, tight=True),
                 ], spacing=11),
                 padding=ft.padding.only(left=6, top=6, bottom=18)),

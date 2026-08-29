@@ -17,7 +17,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files
 
 ROOT = Path(SPECPATH).resolve().parent
-APP_NAME = "Digital Assets Studio"
+APP_NAME = "Artalo Digi Suit"
 
 # flet_desktop carries the Flutter binary that *is* the window. It is imported
 # lazily at runtime, so PyInstaller never sees it and collects none of it - and a
@@ -76,7 +76,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name=APP_NAME if sys.platform == "darwin" else "DigitalAssetsStudio",
+    name=APP_NAME if sys.platform == "darwin" else "ArtaloDigiSuit",
     debug=False,
     strip=False,
     upx=False,
@@ -90,7 +90,7 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="DigitalAssetsStudio",
+    name="ArtaloDigiSuit",
 )
 
 if sys.platform == "darwin":
@@ -98,7 +98,7 @@ if sys.platform == "darwin":
         coll,
         name=f"{APP_NAME}.app",
         icon=icon,
-        bundle_identifier="com.aidiginext.digitalassetsstudio",
+        bundle_identifier="com.aidiginext.artalodigisuit",
         version=APP_VERSION,
         info_plist={
             "CFBundleName": APP_NAME,

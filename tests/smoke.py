@@ -580,10 +580,24 @@ def test_rename_migration():
         cfg.WORKSPACE, cfg.PROJECTS_DIR, cfg.CACHE_DIR, cfg._legacy_workspaces = saved
         sh.rmtree(root, ignore_errors=True)
 
+    # every name the app has shipped under has to keep resolving, or a rename
+    # quietly costs people their projects and their saved keys
+    names = [p.name for p in cfg._legacy_workspaces()]
+    expected = ["digital-assets-studio", "aipath-studio"]      # the XDG names, always
+    if sys.platform == "win32":
+        expected += ["DigitalAssetsStudio", "AIpathStudio"]
+    elif sys.platform == "darwin":
+        expected += ["Digital Assets Studio", "AIpath Studio"]
+    for gone in expected:
+        assert gone in names, f"{gone} is no longer migrated: {names}"
+
     from digital_assets_studio.core import keyvault
-    assert keyvault.SERVICE == "DigitalAssetsStudio"
-    assert keyvault.LEGACY_SERVICE == "AIpathStudio", "old keychain entries must still be readable"
-    print("        projects, settings and keychain entries all survive the rename")
+    assert keyvault.SERVICE == "ArtaloDigiSuit", keyvault.SERVICE
+    for legacy in ("DigitalAssetsStudio", "AIpathStudio"):
+        assert legacy in keyvault.LEGACY_SERVICES, \
+            f"keys saved under {legacy} must still be readable"
+    print(f"        projects, settings and keys survive; {len(names)} old workspaces "
+          f"still migrate")
 
 
 def test_cover_art_sources():

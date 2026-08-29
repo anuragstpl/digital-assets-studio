@@ -52,7 +52,7 @@ jobs:
       - name: Verify the build
         shell: pwsh
         run: |
-          $exe = "dist\DigitalAssetsStudio\DigitalAssetsStudio.exe"
+          $exe = "dist\ArtaloDigiSuit\ArtaloDigiSuit.exe"
           $p = Start-Process -FilePath $exe -ArgumentList "--selftest" -Wait -PassThru `
                  -RedirectStandardOutput selftest.txt -RedirectStandardError selftest.err
           Get-Content selftest.txt
@@ -62,7 +62,7 @@ jobs:
       - name: The window binary has to be in the bundle
         shell: pwsh
         run: |
-          $view = Get-ChildItem -Path dist\DigitalAssetsStudio\_internal `
+          $view = Get-ChildItem -Path dist\ArtaloDigiSuit\_internal `
                     -Recurse -Filter flet.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $view) {
             throw "flet.exe is not in the bundle - this build would relaunch itself forever"
@@ -82,7 +82,7 @@ jobs:
       - name: Also publish a portable zip
         shell: bash
         run: |
-          cd dist && 7z a "DigitalAssetsStudio-${{ steps.version.outputs.v }}-windows-portable.zip" DigitalAssetsStudio/
+          cd dist && 7z a "ArtaloDigiSuit-${{ steps.version.outputs.v }}-windows-portable.zip" ArtaloDigiSuit/
 
       - uses: actions/upload-artifact@v4
         with:

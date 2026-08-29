@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="packaging/icon_512.png" width="120" alt="Digital Assets Studio">
+<img src="packaging/icon_512.png" width="120" alt="Artalo Digi Suit">
 
-# Digital Assets Studio
+# Artalo Digi Suit
 
 **One suite. Every digital asset.**
 
@@ -277,7 +277,7 @@ brew install ffmpeg                        # video and audio rendering (macOS)
 
 ```bash
 pip install flet-cli
-flet pack run.py --name "Digital Assets Studio" --add-data "digital_assets_studio/assets;assets"
+flet pack run.py --name "Artalo Digi Suit" --add-data "digital_assets_studio/assets;assets"
 ```
 
 ## First run
@@ -307,7 +307,7 @@ says so plainly, because that is obfuscation, not encryption.
 
 ```
 %LOCALAPPDATA%\DigitalAssetsStudio\          (Windows)
-~/Library/Application Support/Digital Assets Studio/   (macOS)
+~/Library/Application Support/Artalo Digi Suit/   (macOS)
     settings.json          providers and routing — never secrets
     projects/<slug>/
         project.json       answers and step status

@@ -2,6 +2,19 @@
 
 All notable changes are recorded here. Versions follow [semantic versioning](https://semver.org).
 
+## [0.8.0] - 2026-08-29
+
+### Changed
+- **The app is now Artalo Digi Suit.** New name, new executable, new installer,
+  new workspace folder and a new credential-store entry. Nothing is left behind:
+  an existing install is migrated on first run - projects and settings are copied
+  across from the Digital Assets Studio folder (and from AIpath Studio before it),
+  the old folder is renamed rather than deleted, and saved keys are read from
+  every previous service name and moved over the first time they are used.
+- The Python package is still `digital_assets_studio` and the repository URL is
+  unchanged; renaming either would break every import and every existing link
+  without changing anything a user sees.
+
 ## [0.7.2] - 2026-08-29
 
 ### Fixed

@@ -1,6 +1,6 @@
 # Privacy
 
-Digital Assets Studio runs on your machine. Your drafts, manuscripts, audio,
+Artalo Digi Suit runs on your machine. Your drafts, manuscripts, audio,
 video, projects and API keys stay there. This page says exactly what does leave,
 and how to stop it.
 

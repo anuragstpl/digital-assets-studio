@@ -591,7 +591,7 @@ def _step_render(p: Project, ctx: JobContext) -> StepResult:
             "ffmpeg is not installed or not on PATH.\n"
             "  Windows:  winget install Gyan.FFmpeg\n"
             "  macOS:    brew install ffmpeg\n"
-            "Then restart Digital Assets Studio and run this step again.")
+            "Then restart Artalo Digi Suit and run this step again.")
 
     if engine == ENGINE_EDIT:
         _render_edit(p, ctx, slug, out)

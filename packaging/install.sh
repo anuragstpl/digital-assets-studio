@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install Digital Assets Studio from source on macOS or Linux.
+# Install Artalo Digi Suit from source on macOS or Linux.
 #
 #   bash packaging/install.sh
 #
@@ -39,7 +39,7 @@ echo "==> Checking the install"
 
 if [[ "$OSTYPE" == darwin* ]]; then
   # a double-clickable launcher, since there is no .app in a source install
-  LAUNCHER="$REPO/Digital Assets Studio.command"
+  LAUNCHER="$REPO/Artalo Digi Suit.command"
   cat > "$LAUNCHER" <<LAUNCH
 #!/usr/bin/env bash
 cd "$REPO"
@@ -47,7 +47,7 @@ exec "$VENV" run.py
 LAUNCH
   chmod +x "$LAUNCHER"
   echo
-  echo "Installed. Double-click 'Digital Assets Studio.command', or run:"
+  echo "Installed. Double-click 'Artalo Digi Suit.command', or run:"
 else
   mkdir -p "$HOME/.local/bin"
   cat > "$HOME/.local/bin/digital-assets-studio" <<LAUNCH

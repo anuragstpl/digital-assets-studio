@@ -4,10 +4,10 @@
   #define AppVersion "0.0.0"
 #endif
 
-#define AppName "Digital Assets Studio"
+#define AppName "Artalo Digi Suit"
 #define AppPublisher "AIpath"
 #define AppURL "https://github.com/anuragstpl/digital-assets-studio"
-#define AppExeName "DigitalAssetsStudio.exe"
+#define AppExeName "ArtaloDigiSuit.exe"
 
 [Setup]
 AppId={{7B2F5C41-9E3A-4D8B-A6C2-1F0E5D9A4B37}
@@ -22,7 +22,7 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
 OutputDir=..\dist
-OutputBaseFilename=DigitalAssetsStudio-{#AppVersion}-windows-setup
+OutputBaseFilename=ArtaloDigiSuit-{#AppVersion}-windows-setup
 SetupIconFile=icon.ico
 Compression=lzma2/max
 SolidCompression=yes
@@ -40,7 +40,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
 
 [Files]
-Source: "..\dist\DigitalAssetsStudio\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\ArtaloDigiSuit\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"

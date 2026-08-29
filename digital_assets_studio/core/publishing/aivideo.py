@@ -61,7 +61,7 @@ def _headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://github.com/anuragstpl/digital-assets-studio",
-            "X-Title": "Digital Assets Studio"}
+            "X-Title": "Artalo Digi Suit"}
 
 
 def _explain(r: httpx.Response, what: str) -> AIVideoError:

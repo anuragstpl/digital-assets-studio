@@ -39,7 +39,7 @@ FFMPEG_HINT = (
     "ffmpeg is not installed or not on PATH.\n"
     "  Windows:  winget install Gyan.FFmpeg\n"
     "  macOS:    brew install ffmpeg\n"
-    "Then restart Digital Assets Studio.")
+    "Then restart Artalo Digi Suit.")
 
 XFADE = {tl.FADE: "fade", tl.DISSOLVE: "dissolve", tl.SLIDE: "slideleft"}
 

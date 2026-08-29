@@ -3,8 +3,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "digital-assets-studio"
-version = "0.7.2"
+name = "artalo-digi-suit"
+version = "0.8.0"
 description = "One desktop suite for producing and publishing digital assets: books, printables, audiobooks, YouTube, podcasts, courses and mobile apps."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -48,7 +48,7 @@ Issues = "https://github.com/anuragstpl/digital-assets-studio/issues"
 Changelog = "https://github.com/anuragstpl/digital-assets-studio/blob/main/CHANGELOG.md"
 
 [project.scripts]
-digital-assets-studio = "digital_assets_studio.app:run"
+artalo-digi-suit = "digital_assets_studio.app:run"
 
 [tool.setuptools.packages.find]
 include = ["digital_assets_studio*"]

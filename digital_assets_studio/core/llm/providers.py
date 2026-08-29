@@ -10,7 +10,7 @@ from .base import Completion, LLMError, Message, TextProvider, join_system
 
 log = logging.getLogger(__name__)
 
-_UA = {"User-Agent": "DigitalAssetsStudio/0.1"}
+_UA = {"User-Agent": "ArtaloDigiSuit/0.1"}
 
 
 def _client(timeout: float) -> httpx.Client:

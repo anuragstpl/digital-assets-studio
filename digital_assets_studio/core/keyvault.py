@@ -21,8 +21,10 @@ from ..config import WORKSPACE
 
 log = logging.getLogger(__name__)
 
-SERVICE = "DigitalAssetsStudio"
-LEGACY_SERVICE = "AIpathStudio"   # previous name; kept so existing keys still resolve
+SERVICE = "ArtaloDigiSuit"
+# every name this app has had, newest first; keys saved under any of them
+# are still found and moved across on first read
+LEGACY_SERVICES = ("DigitalAssetsStudio", "AIpathStudio")
 _FALLBACK_FILE = WORKSPACE / "keys.fallback"
 
 
@@ -134,15 +136,16 @@ def get_secret(name: str) -> str:
             got = _KEYRING.get_password(SERVICE, name)
             if got:
                 return got
-            # keys saved before the rename live under the old service name; move
-            # them across the first time they are asked for
-            old = _KEYRING.get_password(LEGACY_SERVICE, name)
-            if old:
-                try:
-                    _KEYRING.set_password(SERVICE, name, old)
-                except Exception:  # noqa: BLE001
-                    pass
-                return old
+            # keys saved under any previous name of the app move across the
+            # first time they are asked for, so a rename never costs anyone a key
+            for legacy in LEGACY_SERVICES:
+                old = _KEYRING.get_password(legacy, name)
+                if old:
+                    try:
+                        _KEYRING.set_password(SERVICE, name, old)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return old
         except Exception as exc:  # noqa: BLE001
             _warn_once(exc)
     # Environment variables win as a last resort so CI / scripts can run headless.

@@ -48,7 +48,7 @@ _HTML_OK = """<!doctype html><meta charset="utf-8"><title>Connected</title>
 <body style="font-family:system-ui;background:#0E1117;color:#E8ECF3;display:flex;
 height:100vh;align-items:center;justify-content:center;margin:0">
 <div style="text-align:center"><h1 style="font-weight:600">Connected</h1>
-<p style="color:#9AA6B8">You can close this tab and go back to Digital Assets Studio.</p></div>"""
+<p style="color:#9AA6B8">You can close this tab and go back to Artalo Digi Suit.</p></div>"""
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):

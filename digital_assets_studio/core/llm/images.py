@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 
 def _client(timeout: float) -> httpx.Client:
     return httpx.Client(timeout=httpx.Timeout(timeout, connect=20.0),
-                        headers={"User-Agent": "DigitalAssetsStudio/0.1"}, follow_redirects=True)
+                        headers={"User-Agent": "ArtaloDigiSuit/0.1"}, follow_redirects=True)
 
 
 def _fail(r: httpx.Response, who: str) -> LLMError:

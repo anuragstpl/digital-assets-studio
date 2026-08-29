@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start Digital Assets Studio.
+"""Start Artalo Digi Suit.
 
     python run.py              launch the app
     python run.py --selftest   check the install without opening a window

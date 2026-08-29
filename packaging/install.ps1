@@ -1,4 +1,4 @@
-# Install Digital Assets Studio from source on Windows.
+# Install Artalo Digi Suit from source on Windows.
 #
 #   powershell -ExecutionPolicy Bypass -File packaging\install.ps1
 #
@@ -42,7 +42,7 @@ Write-Host "==> Checking the install" -ForegroundColor Cyan
 if ($LASTEXITCODE -ne 0) { throw "The install did not verify" }
 
 # a launcher that starts the app without a console window
-$vbs = Join-Path $repo "Digital Assets Studio.vbs"
+$vbs = Join-Path $repo "Artalo Digi Suit.vbs"
 @"
 Set s = CreateObject("WScript.Shell")
 s.CurrentDirectory = "$repo"
@@ -51,7 +51,7 @@ s.Run """$repo\.venv\Scripts\pythonw.exe"" ""$repo\run.py""", 0, False
 
 $shell = New-Object -ComObject WScript.Shell
 foreach ($dir in @([Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Desktop"))) {
-  $lnk = $shell.CreateShortcut((Join-Path $dir "Digital Assets Studio.lnk"))
+  $lnk = $shell.CreateShortcut((Join-Path $dir "Artalo Digi Suit.lnk"))
   $lnk.TargetPath = $vbs
   $lnk.WorkingDirectory = $repo
   $lnk.IconLocation = Join-Path $repo "packaging\icon.ico"

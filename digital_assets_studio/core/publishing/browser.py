@@ -41,7 +41,7 @@ INSTALL_HINT = (
     "Browser automation needs Playwright:\n"
     "    pip install playwright\n"
     "    playwright install chromium\n"
-    "Then restart Digital Assets Studio."
+    "Then restart Artalo Digi Suit."
 )
 
 

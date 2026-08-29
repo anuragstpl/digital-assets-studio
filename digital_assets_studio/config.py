@@ -13,9 +13,9 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-APP_NAME = "Digital Assets Studio"
-APP_ID = "digital-assets-studio"
-APP_VERSION = "0.7.2"
+APP_NAME = "Artalo Digi Suit"
+APP_ID = "artalo-digi-suit"
+APP_VERSION = "0.8.0"
 TAGLINE = "One suite. Every digital asset."
 
 # Aptabase ingest key for anonymous usage analytics. It is a write-only key and
@@ -37,24 +37,30 @@ def _default_workspace() -> Path:
 
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-        return Path(base) / "DigitalAssetsStudio"
+        return Path(base) / "ArtaloDigiSuit"
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Digital Assets Studio"
-    return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "digital-assets-studio"
+        return Path.home() / "Library" / "Application Support" / "Artalo Digi Suit"
+    return Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "artalo-digi-suit"
 
 
 def _legacy_workspaces() -> list[Path]:
-    """Where the app kept its data under its previous name.
+    """Where the app kept its data under its previous names.
 
     These strings are load-bearing: they are how an existing install finds its
-    projects after the rename. Do not remove them."""
+    projects after a rename. Do not remove them. The app has been AIpath Studio
+    and Digital Assets Studio; both still have to resolve."""
     out: list[Path] = []
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        out.append(Path(base) / "DigitalAssetsStudio")
         out.append(Path(base) / "AIpathStudio")
     elif sys.platform == "darwin":
-        out.append(Path.home() / "Library" / "Application Support" / "AIpath Studio")
-    out.append(Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "aipath-studio")
+        support = Path.home() / "Library" / "Application Support"
+        out.append(support / "Digital Assets Studio")
+        out.append(support / "AIpath Studio")
+    share = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
+    out.append(share / "digital-assets-studio")
+    out.append(share / "aipath-studio")
     return out
 
 
