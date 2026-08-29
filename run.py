@@ -55,6 +55,29 @@ def selftest() -> int:
     except Exception as exc:  # noqa: BLE001
         problems.append(f"flet not importable: {exc}")
 
+    # The window itself is a separate Flutter binary inside flet_desktop. It is
+    # imported lazily, so a packaged build can leave it out and still pass every
+    # other check here - and then, on a user's machine, start, fail to find the
+    # view, relaunch itself, and repeat forever without ever drawing a window.
+    # That shipped once. It does not ship again.
+    try:
+        from pathlib import Path as _Path
+
+        import flet_desktop
+
+        app_dir = _Path(flet_desktop.__file__).resolve().parent / "app"
+        names = ("flet.exe", "flet", "Flet.app")
+        found = ([f for f in app_dir.rglob("*") if f.name in names]
+                 if app_dir.exists() else [])
+        if not found:
+            problems.append(
+                f"the Flutter view binary is missing from {app_dir} - this build would "
+                f"relaunch itself forever instead of opening a window")
+        else:
+            print(f"  window     {found[0].name} present")
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"flet_desktop not importable: {exc}")
+
     if problems:
         print("\nFAILED")
         for p in problems:

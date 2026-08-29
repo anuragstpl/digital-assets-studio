@@ -2,6 +2,19 @@
 
 All notable changes are recorded here. Versions follow [semantic versioning](https://semver.org).
 
+## [0.7.1] - 2026-08-29
+
+### Fixed
+- **The packaged app could not open a window.** flet_desktop carries the Flutter
+  binary that *is* the window, and it is imported lazily, so PyInstaller never
+  saw it and collected none of it. A build without it does not crash: it starts,
+  fails to find the view, relaunches itself through `sys.executable`, and repeats
+  that forever - dozens of processes, no window, no error. Every packaged build
+  is affected, including the 0.7.0 installers and DMG; install 0.7.1 instead.
+- `--selftest` now checks that the view binary is actually in the bundle, so this
+  class of failure fails the build rather than reaching a download page. It
+  passed on the broken build precisely because it never opens a window.
+
 ## [0.7.0] - 2026-08-29
 
 ### Added

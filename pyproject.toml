@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "digital-assets-studio"
-version = "0.7.0"
+version = "0.7.1"
 description = "One desktop suite for producing and publishing digital assets: books, printables, audiobooks, YouTube, podcasts, courses and mobile apps."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"

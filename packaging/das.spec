@@ -14,8 +14,17 @@ or every cover, banner and slide render dies on a missing font. `run.py
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_data_files
+
 ROOT = Path(SPECPATH).resolve().parent
 APP_NAME = "Digital Assets Studio"
+
+# flet_desktop carries the Flutter binary that *is* the window. It is imported
+# lazily at runtime, so PyInstaller never sees it and collects none of it - and a
+# build without it does not fail: it starts, cannot find the view, relaunches
+# itself through sys.executable, and does that forever without ever drawing a
+# window. Collect it explicitly, and keep --selftest honest about it.
+FLET_VIEW = collect_data_files("flet_desktop", include_py_files=False)
 
 sys.path.insert(0, str(ROOT))
 from digital_assets_studio.config import APP_VERSION  # noqa: E402
@@ -32,9 +41,10 @@ a = Analysis(
     pathex=[str(ROOT)],
     binaries=[],
     datas=[(str(ROOT / "digital_assets_studio" / "assets"),
-            "digital_assets_studio/assets")],
+            "digital_assets_studio/assets")] + FLET_VIEW,
     hiddenimports=[
         "digital_assets_studio",
+        "flet_desktop",
         "keyring.backends.Windows",
         "keyring.backends.macOS",
         "keyring.backends.SecretService",
