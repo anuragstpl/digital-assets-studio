@@ -34,10 +34,8 @@ for _view in ("flet_desktop", "flet_desktop_light"):
         pass
 if not FLET_VIEW:
     raise SystemExit(
-        "No Flet desktop view found. Install it before building:
-"
-        "    pip install 'flet[desktop]==0.28.3'
-"
+        "No Flet desktop view found. Install it before building:\n"
+        "    pip install 'flet[desktop]==0.28.3'\n"
         "Without it the packaged app starts, cannot find a window, and relaunches "
         "itself forever.")
 
