@@ -10,7 +10,12 @@ env/
 .eggs/
 
 # Flet / PyInstaller
+# PyInstaller writes a .spec beside whatever you point it at; ours is written by
+# hand and is what every release is built from, so it has to be in the repo. It
+# was not, and that is why every release build since 0.5.0 failed on all three
+# platforms before it had compiled a line.
 *.spec
+!packaging/das.spec
 storage/
 
 # The app's own workspace, if anyone points it at the repo
